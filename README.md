@@ -21,6 +21,12 @@ The requirements include:
 -- Ideally the user should be able to draw the annotation boxes by actually highlighting the text, like you can do in Google Chrome or Adobe Acrobat.
 -- I want to display the PDF with selectable text. 
 -- There should also be button controls for zooming in [+] and out [-].
+-- The annotation data should be saved to a SQLite database as a backend
+-- The user should be able to export the annotation data for the current PDF being read to a CSV file
+-- Dates extracted from the PDFs should be converted to YYYY-MM-DD format
+-- SQLite should have a primary unique auto-incrementing index following best practices
+-- Each row in the database will be 1 specific annotation. It should include the file_name as well as the regular annotation data stored in it, including the extracted Rect() data for that annotation.
+-- All other fields except for dates and not should be stored as strings, including line_item_number
 
 ## Preferred libraries
 I prefer to use the following libraries:
