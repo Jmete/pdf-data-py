@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QSplitter, QVBoxLayout
                               QFileDialog, QLabel, QPushButton, QGraphicsView,
                               QGraphicsScene, QGraphicsPixmapItem, QTableWidget,
                               QTableWidgetItem, QSlider, QComboBox, QMessageBox)
-from PySide6.QtCore import Qt, QRectF, Signal, QSize, QPoint, QPointF, QSizeF
+from PySide6.QtCore import Qt, QRectF, Signal, QSize, QPoint, QPointF, QSizeF, QEvent
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QPixmap, QImage, 
                           QCursor, QTransform, QColor, QPen, QBrush, QPainter)
 
@@ -17,6 +17,7 @@ class PDFViewer(QGraphicsView):
     textSelected = Signal(str)
     annotationAdded = Signal()
     annotationRemoved = Signal()
+    statusUpdated = Signal(str)  # New signal for status updates
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -193,9 +194,8 @@ class PDFViewer(QGraphicsView):
         # Center the content
         self.centerOn(scene_rect.center())
         
-        # Update zoom slider if available
-        if hasattr(self.parent(), 'zoom_slider'):
-            self.parent().zoom_slider.setValue(int(self.zoom_factor * 100))
+        # Emit status update
+        self.statusUpdated.emit(f"Zoom: {int(self.zoom_factor * 100)}%")
     
     def renderPage(self, page_idx):
         """Re-render a specific page (e.g., after adding annotations)"""
@@ -242,9 +242,8 @@ class PDFViewer(QGraphicsView):
             if self.zoom_factor > self.max_zoom:
                 self.zoom_factor = self.max_zoom
                 
-            # Update status bar with current zoom percentage
-            if self.parent():
-                self.parent().statusBar().showMessage(f"Zoom: {int(self.zoom_factor * 100)}%")
+            # Emit status update
+            self.statusUpdated.emit(f"Zoom: {int(self.zoom_factor * 100)}%")
     
     def zoomOut(self):
         """Zoom out the view"""
@@ -258,9 +257,8 @@ class PDFViewer(QGraphicsView):
             if self.zoom_factor < self.min_zoom:
                 self.zoom_factor = self.min_zoom
                 
-            # Update status bar with current zoom percentage
-            if self.parent():
-                self.parent().statusBar().showMessage(f"Zoom: {int(self.zoom_factor * 100)}%")
+            # Emit status update
+            self.statusUpdated.emit(f"Zoom: {int(self.zoom_factor * 100)}%")
     
     def goToPage(self, page_num):
         """Scroll view to specific page"""
@@ -327,7 +325,7 @@ class PDFViewer(QGraphicsView):
                 'page': page_idx,
                 'rect': rect,
                 'text': text,
-                'annot': highlight
+                'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
             })
             
             # Re-render the page to show the highlight
@@ -411,7 +409,7 @@ class PDFViewer(QGraphicsView):
             'page': page_idx,
             'rect': pdf_rect,
             'text': text,
-            'annot': annot
+            'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
         })
         
         # Re-render the page
@@ -422,27 +420,34 @@ class PDFViewer(QGraphicsView):
         
         return text
     
-    def removeAnnotation(self, page_idx, annot):
+    def removeAnnotation(self, page_idx, annot_id=None):
         """Remove a specific annotation from a page"""
         if not self.doc or page_idx < 0 or page_idx >= self.page_count:
             return False
             
         page = self.doc[page_idx]
-        if annot and hasattr(annot, 'parent') and annot.parent:
-            try:
-                page.delete_annot(annot)
+        
+        try:
+            # Get all annotations on the page and convert to a list (important!)
+            annotations = list(page.annots())
+            if annotations and len(annotations) > 0:
+                # Always remove the last annotation on the page
+                page.delete_annot(annotations[-1])
                 # Re-render the page
                 self.renderPage(page_idx)
                 # Emit signal that an annotation was removed
                 self.annotationRemoved.emit()
                 return True
-            except Exception as e:
-                print(f"Error removing annotation: {str(e)}")
+            else:
+                print("No annotations found on page")
+        except Exception as e:
+            print(f"Error removing annotation: {str(e)}")
         return False
     
     def undoLastAnnotation(self):
         """Remove the last annotation added"""
         if not self.annotations:
+            self.statusUpdated.emit("No annotations to undo")
             return False
             
         # Get the last annotation
@@ -450,9 +455,13 @@ class PDFViewer(QGraphicsView):
         
         # Remove from the document
         page_idx = last_annot['page']
-        annot_obj = last_annot.get('annot')
         
-        return self.removeAnnotation(page_idx, annot_obj)
+        result = self.removeAnnotation(page_idx)
+        if result:
+            self.statusUpdated.emit("Last annotation removed")
+        else:
+            self.statusUpdated.emit("Failed to remove annotation")
+        return result
     
     # Event handlers for mouse interaction
     def wheelEvent(self, event):
@@ -474,11 +483,6 @@ class PDFViewer(QGraphicsView):
             delta_scene = pos_after - pos_before
             self.translate(delta_scene.x(), delta_scene.y())
             
-            # Update zoom slider
-            if hasattr(self.parent(), 'zoom_slider'):
-                self.parent().zoom_slider.setValue(int(self.zoom_factor * 100))
-                self.parent().zoom_label.setText(f"{int(self.zoom_factor * 100)}%")
-                
             event.accept()
         else:
             # Normal scrolling
@@ -491,7 +495,7 @@ class PDFViewer(QGraphicsView):
             return
             
         if event.button() == Qt.LeftButton:
-            scene_pos = self.mapToScene(event.pos())
+            scene_pos = self.mapToScene(event.position().toPoint())
             
             if event.modifiers() & Qt.ControlModifier:
                 # Start annotation or selection with Ctrl+Left click
@@ -518,7 +522,7 @@ class PDFViewer(QGraphicsView):
         """Handle mouse move events"""
         if self.is_selecting and self.selection_rect:
             # Update selection rectangle
-            current_pos = self.mapToScene(event.pos())
+            current_pos = self.mapToScene(event.position().toPoint())
             
             rect = QRectF(
                 min(self.selection_start.x(), current_pos.x()),
@@ -535,7 +539,7 @@ class PDFViewer(QGraphicsView):
     def mouseReleaseEvent(self, event):
         """Handle mouse release events"""
         if event.button() == Qt.LeftButton and self.is_selecting:
-            end_pos = self.mapToScene(event.pos())
+            end_pos = self.mapToScene(event.position().toPoint())
             
             # Find the page(s) where the selection starts and ends
             start_page_idx, start_page = self.findPageAt(self.selection_start)
@@ -577,7 +581,7 @@ class PDFViewer(QGraphicsView):
                             'page': page_idx,
                             'rect': page_rect,
                             'text': text,
-                            'annot': highlight
+                            'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
                         })
                         
                         # Re-render the page
@@ -599,18 +603,17 @@ class PDFViewer(QGraphicsView):
     
     def keyPressEvent(self, event):
         """Handle key press events"""
-        # Handle Ctrl+Z for undo
-        if event.key() == Qt.Key_Z and event.modifiers() & Qt.ControlModifier:
-            self.undoLastAnnotation()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
+        # We'll handle Ctrl+Z at the main window level instead
+        super().keyPressEvent(event)
 
 
 class PDFViewerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.initUI()
+        
+        # Enable key press events for the main window
+        self.setFocusPolicy(Qt.StrongFocus)
         
     def initUI(self):
         # Set window properties
@@ -667,7 +670,9 @@ class PDFViewerApp(QMainWindow):
         
         # Connect signals
         self.pdf_viewer.textSelected.connect(self.onTextSelected)
+        self.pdf_viewer.annotationAdded.connect(self.updateAnnotationsList)
         self.pdf_viewer.annotationRemoved.connect(self.updateAnnotationsList)
+        self.pdf_viewer.statusUpdated.connect(self.updateStatus)  # Connect to new status signal
         
         # Add panels to splitter with 2:1 ratio
         self.splitter.addWidget(self.pdf_viewer)
@@ -679,6 +684,14 @@ class PDFViewerApp(QMainWindow):
         
         # Set up drag and drop
         self.setAcceptDrops(True)
+        
+        # Set focus policy to ensure keyboard events are received
+        self.pdf_viewer.setFocusPolicy(Qt.StrongFocus)
+        
+        # Set as the central widget to receive key events
+        self.pdf_viewer.setFocus()
+        
+        # We'll rely on keyPressEvent instead of event filter
     
     def createMenuBar(self):
         menubar = self.menuBar()
@@ -701,11 +714,11 @@ class PDFViewerApp(QMainWindow):
         # Edit menu
         edit_menu = menubar.addMenu("&Edit")
         
-        # Undo action
-        undo_action = QAction("&Undo", self)
-        undo_action.setShortcut(QKeySequence.Undo)  # Ctrl+Z
-        undo_action.triggered.connect(self.undoLastAnnotation)
-        edit_menu.addAction(undo_action)
+        # Undo action - don't set shortcut in the QAction to avoid ambiguity
+        self.undo_action = QAction("&Undo Annotation", self)
+        # We'll handle the shortcut directly in keyPressEvent
+        self.undo_action.triggered.connect(self.undoLastAnnotation)
+        edit_menu.addAction(self.undo_action)
     
     def createToolbar(self):
         toolbar = QToolBar("PDF Controls")
@@ -768,9 +781,8 @@ class PDFViewerApp(QMainWindow):
         annotate_btn.triggered.connect(self.addAnnotation)
         toolbar.addAction(annotate_btn)
         
-        # Undo annotation button
+        # Undo annotation button - no shortcut here to avoid ambiguity
         undo_btn = QAction("Undo Annotation", self)
-        undo_btn.setShortcut(QKeySequence.Undo)  # Ctrl+Z
         undo_btn.triggered.connect(self.undoLastAnnotation)
         toolbar.addAction(undo_btn)
         
@@ -786,6 +798,10 @@ class PDFViewerApp(QMainWindow):
         
         # Add status bar
         self.statusBar().showMessage("Ready. Use Ctrl+Left click to select text/create annotations")
+    
+    def updateStatus(self, message):
+        """Update status bar with the message from PDF viewer"""
+        self.statusBar().showMessage(message)
     
     def openFile(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -885,11 +901,13 @@ class PDFViewerApp(QMainWindow):
         self.pdf_viewer.zoomIn()
         # Update slider to match
         self.zoom_slider.setValue(int(self.pdf_viewer.zoom_factor * 100))
+        self.zoom_label.setText(f"{int(self.pdf_viewer.zoom_factor * 100)}%")
     
     def zoomOut(self):
         self.pdf_viewer.zoomOut()
         # Update slider to match
         self.zoom_slider.setValue(int(self.pdf_viewer.zoom_factor * 100))
+        self.zoom_label.setText(f"{int(self.pdf_viewer.zoom_factor * 100)}%")
     
     def previousPage(self):
         self.pdf_viewer.goToPrevPage()
@@ -907,17 +925,25 @@ class PDFViewerApp(QMainWindow):
     
     def undoLastAnnotation(self):
         """Remove the last annotation"""
+        print("Attempting to undo annotation")
         if not self.pdf_viewer.doc or not self.pdf_viewer.annotations:
+            print("No annotations to undo")
             self.statusBar().showMessage("No annotations to undo")
-            return
+            return False
             
+        # Get the last annotation
+        last_annot = self.pdf_viewer.annotations.pop()
+        print(f"Last annotation on page: {last_annot['page']}")
+        
         # Use the PDFViewer's method to remove the last annotation
-        if self.pdf_viewer.undoLastAnnotation():
+        if self.pdf_viewer.removeAnnotation(last_annot['page']):
             # Update the annotations list
             self.updateAnnotationsList()
             self.statusBar().showMessage("Last annotation removed")
+            return True
         else:
             self.statusBar().showMessage("Failed to remove annotation")
+            return False
     
     def onZoomSliderChange(self, value):
         """Handle zoom slider change"""
@@ -980,6 +1006,22 @@ class PDFViewerApp(QMainWindow):
                 self.zoom_slider.setValue(int(current_zoom * 100))
                 
                 self.statusBar().showMessage(f"Quality set to {quality}, zoom: {int(current_zoom * 100)}%")
+    
+    # Event handlers
+    def keyPressEvent(self, event):
+        """Handle key press events at the main window level"""
+        # Check for Ctrl+Z
+        if event.key() == Qt.Key_Z and event.modifiers() & Qt.ControlModifier:
+            # Handle Ctrl+Z directly here
+            print("Ctrl+Z detected in main window")
+            result = self.undoLastAnnotation()
+            print(f"Undo result: {result}")
+            event.accept()
+        else:
+            # For all other key events, pass to parent implementation
+            super().keyPressEvent(event)
+        
+    # We're not using eventFilter anymore, relying on keyPressEvent instead
     
     # Drag and drop event handlers
     def dragEnterEvent(self, event):
