@@ -6,19 +6,118 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QSplitter, QVBoxLayout
                               QFileDialog, QLabel, QPushButton, QGraphicsView,
                               QGraphicsScene, QGraphicsPixmapItem, QTableWidget,
                               QTableWidgetItem, QSlider, QComboBox, QMessageBox,
-                              QHeaderView)
+                              QHeaderView, QDialog, QRadioButton, QButtonGroup,
+                              QFormLayout, QLineEdit, QDialogButtonBox, QGroupBox)
 from PySide6.QtCore import Qt, QRectF, Signal, QSize, QPoint, QPointF, QSizeF, QEvent
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QPixmap, QImage, 
                           QCursor, QTransform, QColor, QPen, QBrush, QPainter)
+
+
+class AnnotationFieldDialog(QDialog):
+    """Dialog for selecting the field type for annotations"""
+    
+    def __init__(self, parent=None, last_line_item_number=""):
+        super().__init__(parent)
+        self.setWindowTitle("Annotation Field Selection")
+        self.setMinimumWidth(400)
+        
+        # Define field lists
+        self.meta_fields = [
+            "document_name", "customer_name", "buyer_name", 
+            "currency", "rfq_date", "due_date"
+        ]
+        
+        self.line_item_fields = [
+            "material_number", "part_number", "description",
+            "full_description", "quantity", "unit_of_measure",
+            "requested_delivery_date", "delivery_point", "manufacturer_name"
+        ]
+        
+        # Store the last line item number used
+        self.last_line_item_number = last_line_item_number
+        
+        # Create the dialog layout
+        self.main_layout = QVBoxLayout(self)
+        
+        # Create radio button group for data type selection
+        self.type_group_box = QGroupBox("Annotation Type")
+        self.type_layout = QVBoxLayout()
+        
+        self.meta_radio = QRadioButton("Meta Data")
+        self.line_item_radio = QRadioButton("Line Item Data")
+        
+        self.type_button_group = QButtonGroup(self)
+        self.type_button_group.addButton(self.meta_radio, 1)
+        self.type_button_group.addButton(self.line_item_radio, 2)
+        
+        self.type_layout.addWidget(self.meta_radio)
+        self.type_layout.addWidget(self.line_item_radio)
+        self.type_group_box.setLayout(self.type_layout)
+        
+        # Create field selection combo box
+        self.field_layout = QFormLayout()
+        self.field_combo = QComboBox()
+        self.field_layout.addRow("Field:", self.field_combo)
+        
+        # Create line item number input (initially hidden)
+        self.line_item_number_input = QLineEdit()
+        self.line_item_number_input.setText(self.last_line_item_number)
+        self.line_item_number_label = QLabel("Line Item Number:")
+        self.field_layout.addRow(self.line_item_number_label, self.line_item_number_input)
+        
+        # Add the form to the main layout
+        self.main_layout.addWidget(self.type_group_box)
+        self.main_layout.addLayout(self.field_layout)
+        
+        # Add OK and Cancel buttons
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        self.main_layout.addWidget(self.button_box)
+        
+        # Connect radio buttons to update available fields
+        self.meta_radio.toggled.connect(self.updateFieldOptions)
+        
+        # Default to meta data selected
+        self.meta_radio.setChecked(True)
+        self.updateFieldOptions()
+        
+    def updateFieldOptions(self):
+        """Update field options based on selected type"""
+        self.field_combo.clear()
+        
+        if self.meta_radio.isChecked():
+            self.field_combo.addItems(self.meta_fields)
+            self.line_item_number_label.setVisible(False)
+            self.line_item_number_input.setVisible(False)
+        else:
+            self.field_combo.addItems(self.line_item_fields)
+            self.line_item_number_label.setVisible(True)
+            self.line_item_number_input.setVisible(True)
+            
+    def getFieldInfo(self):
+        """Get the selected field information"""
+        if self.meta_radio.isChecked():
+            return {
+                'type': 'meta',
+                'field': self.field_combo.currentText(),
+                'line_item_number': ''
+            }
+        else:
+            return {
+                'type': 'line_item',
+                'field': self.field_combo.currentText(),
+                'line_item_number': self.line_item_number_input.text()
+            }
 
 
 class PDFViewer(QGraphicsView):
     """Custom widget for displaying and interacting with PDF pages"""
     # Signals
     textSelected = Signal(str)
-    annotationAdded = Signal()
+    annotationAdded = Signal(dict)  # Updated to include field info
     annotationRemoved = Signal()
-    statusUpdated = Signal(str)  # New signal for status updates
+    statusUpdated = Signal(str)  # Signal for status updates
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +146,9 @@ class PDFViewer(QGraphicsView):
         self.selection_start = QPointF()
         self.selection_rect = None
         self.annotations = []
+        
+        # Store the last line item number used
+        self.last_line_item_number = ""
         
         # Configure view
         self.setRenderHint(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
@@ -321,20 +423,41 @@ class PDFViewer(QGraphicsView):
         if text:
             highlight = page.add_highlight_annot(rect)
             
-            # Store annotation info with rect details
-            self.annotations.append({
+            # Create annotation without field info - will be added later
+            # after the dialog is shown
+            new_annotation = {
                 'page': page_idx,
                 'rect': rect,
                 'rect_str': f"({rect.x0:.2f}, {rect.y0:.2f}, {rect.x1:.2f}, {rect.y1:.2f})",
                 'text': text,
                 'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
-            })
+            }
+            
+            # Store annotation temporarily
+            self.annotations.append(new_annotation)
             
             # Re-render the page to show the highlight
             self.renderPage(page_idx)
             
-            # Emit signal that an annotation was added
-            self.annotationAdded.emit()
+            # Show field selection dialog
+            dialog = AnnotationFieldDialog(self.parent(), self.last_line_item_number)
+            if dialog.exec() == QDialog.Accepted:
+                # Get field info from dialog
+                field_info = dialog.getFieldInfo()
+                
+                # Remember the line item number for next time
+                if field_info['type'] == 'line_item' and field_info['line_item_number']:
+                    self.last_line_item_number = field_info['line_item_number']
+                
+                # Update the annotation with field info
+                self.annotations[-1].update(field_info)
+                
+                # Emit signal that an annotation was added (with field info)
+                self.annotationAdded.emit(self.annotations[-1])
+            else:
+                # Dialog was cancelled, remove the annotation
+                self.undoLastAnnotation()
+                return ""
             
         return text
     
@@ -406,20 +529,40 @@ class PDFViewer(QGraphicsView):
         # Create annotation
         annot = page.add_highlight_annot(pdf_rect)
         
-        # Store annotation with rect details
-        self.annotations.append({
+        # Create temporary annotation
+        new_annotation = {
             'page': page_idx,
             'rect': pdf_rect,
             'rect_str': f"({pdf_rect.x0:.2f}, {pdf_rect.y0:.2f}, {pdf_rect.x1:.2f}, {pdf_rect.y1:.2f})",
             'text': text,
             'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
-        })
+        }
+        
+        # Store annotation temporarily
+        self.annotations.append(new_annotation)
         
         # Re-render the page
         self.renderPage(page_idx)
         
-        # Emit signal that an annotation was added
-        self.annotationAdded.emit()
+        # Show field selection dialog
+        dialog = AnnotationFieldDialog(self.parent(), self.last_line_item_number)
+        if dialog.exec() == QDialog.Accepted:
+            # Get field info from dialog
+            field_info = dialog.getFieldInfo()
+            
+            # Remember the line item number for next time
+            if field_info['type'] == 'line_item' and field_info['line_item_number']:
+                self.last_line_item_number = field_info['line_item_number']
+            
+            # Update the annotation with field info
+            self.annotations[-1].update(field_info)
+            
+            # Emit signal that an annotation was added (with field info)
+            self.annotationAdded.emit(self.annotations[-1])
+        else:
+            # Dialog was cancelled, remove the annotation
+            self.undoLastAnnotation()
+            return ""
         
         return text
     
@@ -602,17 +745,45 @@ class PDFViewer(QGraphicsView):
                         
                         # Add highlight annotation
                         highlight = page.add_highlight_annot(page_rect)
-                        # Store annotation with rect details
-                        self.annotations.append({
+                        
+                        # Add temporary annotation
+                        new_annotation = {
                             'page': page_idx,
                             'rect': page_rect,
                             'rect_str': f"({page_rect.x0:.2f}, {page_rect.y0:.2f}, {page_rect.x1:.2f}, {page_rect.y1:.2f})",
                             'text': text,
                             'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
-                        })
+                        }
+                        
+                        # Store annotation temporarily
+                        self.annotations.append(new_annotation)
                         
                         # Re-render the page
                         self.renderPage(page_idx)
+                    
+                    # Show field selection dialog for multi-page annotation
+                    dialog = AnnotationFieldDialog(self.parent(), self.last_line_item_number)
+                    if dialog.exec() == QDialog.Accepted:
+                        # Get field info from dialog
+                        field_info = dialog.getFieldInfo()
+                        
+                        # Remember the line item number for next time
+                        if field_info['type'] == 'line_item' and field_info['line_item_number']:
+                            self.last_line_item_number = field_info['line_item_number']
+                        
+                        # Update all the annotations with the same field info
+                        for i in range(start_page_idx, end_page_idx + 1):
+                            annot_idx = len(self.annotations) - (end_page_idx - start_page_idx + 1) + (i - start_page_idx)
+                            if 0 <= annot_idx < len(self.annotations):
+                                self.annotations[annot_idx].update(field_info)
+                        
+                        # Emit signal that an annotation was added
+                        self.annotationAdded.emit(self.annotations[-1])
+                    else:
+                        # Dialog was cancelled, remove all the added annotations
+                        for i in range(end_page_idx - start_page_idx + 1):
+                            self.undoLastAnnotation()
+                        return ""
                 
                 # Emit a signal to update UI with the selected text
                 self.textSelected.emit(selected_text)
@@ -688,19 +859,24 @@ class PDFViewerApp(QMainWindow):
         self.data_layout.addWidget(self.annotations_label)
         
         self.annotations_list = QTableWidget()
-        self.annotations_list.setColumnCount(4)  # Updated to include Rect and Delete button
-        self.annotations_list.setHorizontalHeaderLabels(["Page", "Rect", "Text", "Delete"])
+        self.annotations_list.setColumnCount(7)  # Updated columns to include field info
+        self.annotations_list.setHorizontalHeaderLabels(
+            ["Page", "Type", "Item #", "Field", "Rect", "Text", "Delete"]
+        )
         self.annotations_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.data_layout.addWidget(self.annotations_list)
         
         self.data_panel.setWidget(self.data_content)
         
         # Connect signals
         self.pdf_viewer.textSelected.connect(self.onTextSelected)
-        self.pdf_viewer.annotationAdded.connect(self.updateAnnotationsList)
+        self.pdf_viewer.annotationAdded.connect(self.onAnnotationAdded)
         self.pdf_viewer.annotationRemoved.connect(self.updateAnnotationsList)
         self.pdf_viewer.statusUpdated.connect(self.updateStatus)  # Connect to new status signal
         
@@ -896,12 +1072,13 @@ class PDFViewerApp(QMainWindow):
         """Handle text selection event from the PDF viewer"""
         if text:
             self.selected_text_display.setText(text)
-            
-            # Update annotations list
-            self.updateAnnotationsList()
+    
+    def onAnnotationAdded(self, annotation):
+        """Handle annotation added event with field information"""
+        self.updateAnnotationsList()
     
     def updateAnnotationsList(self):
-        """Update the annotations list in the data panel with rect details and delete buttons"""
+        """Update the annotations list in the data panel with field info"""
         if not self.pdf_viewer.doc:
             return
             
@@ -917,22 +1094,34 @@ class PDFViewerApp(QMainWindow):
             page_item = QTableWidgetItem(str(annot['page'] + 1))  # +1 for human-readable page numbers
             self.annotations_list.setItem(row_position, 0, page_item)
             
+            # Add annotation type
+            type_item = QTableWidgetItem(annot.get('type', ''))
+            self.annotations_list.setItem(row_position, 1, type_item)
+            
+            # Add line item number
+            line_item_num = QTableWidgetItem(annot.get('line_item_number', ''))
+            self.annotations_list.setItem(row_position, 2, line_item_num)
+            
+            # Add field name
+            field_item = QTableWidgetItem(annot.get('field', ''))
+            self.annotations_list.setItem(row_position, 3, field_item)
+            
             # Add rect information
             rect_item = QTableWidgetItem(annot['rect_str'])
-            self.annotations_list.setItem(row_position, 1, rect_item)
+            self.annotations_list.setItem(row_position, 4, rect_item)
             
             # Add annotation text (truncated if too long)
             text = annot['text']
             if len(text) > 50:
                 text = text[:47] + "..."
             text_item = QTableWidgetItem(text)
-            self.annotations_list.setItem(row_position, 2, text_item)
+            self.annotations_list.setItem(row_position, 5, text_item)
             
             # Add delete button
             delete_button = QPushButton("[x]")
             delete_button.setFixedWidth(30)
             delete_button.clicked.connect(lambda checked, index=i: self.onDeleteAnnotation(index))
-            self.annotations_list.setCellWidget(row_position, 3, delete_button)
+            self.annotations_list.setCellWidget(row_position, 6, delete_button)
     
     def onDeleteAnnotation(self, index):
         """Handle delete button click for a specific annotation"""

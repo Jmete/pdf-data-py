@@ -1,6 +1,9 @@
 # PDF Data Py
 
+## Summary
 We are building a PDF viewer app in python that should be able to run on multiple platforms, including Windows.
+
+## Goals & Requirements
 The requirements include:
 - GUI app that has a menu bar at top, and 2 panels below.
 - Left panel will be a PDF viewer, Right panel will show the data extracted from the PDF
@@ -19,8 +22,35 @@ The requirements include:
 -- I want to display the PDF with selectable text. 
 -- There should also be button controls for zooming in [+] and out [-].
 
+## Preferred libraries
 I prefer to use the following libraries:
 - pymupdf
 - PySide6
 
 If the above libraries do not support a feature that I want to add, then please let me know and suggest a proper alternative. 
+
+## Data to Extract
+<data to extract>
+<meta data>
+- document_name
+- customer_name
+- buyer_name
+- currency
+- rfq_date
+- due_date
+</meta data>
+
+<line item data>
+- line_item_number
+- material_number
+- part_number
+- description
+- full_description
+- quantity
+- unit_of_measure
+- requested_delivery_date
+- delivery_point
+- manufacturer_name
+</line item data>
+</data to extract>
+
