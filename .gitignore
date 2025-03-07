@@ -8,6 +8,8 @@ wheels/
 
 # Files to ignore
 *.pdf
+*.db
+*.csv
 
 # Folders to ignore
 example_files/

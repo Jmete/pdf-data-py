@@ -12,6 +12,21 @@ from PySide6.QtCore import Qt, QRectF, Signal, QSize, QPoint, QPointF, QSizeF, Q
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QPixmap, QImage, 
                           QCursor, QTransform, QColor, QPen, QBrush, QPainter)
 
+# Create a dummy sip module with isdeleted function
+class DummySip:
+    @staticmethod
+    def isdeleted(obj):
+        # Try to access a property that should always exist
+        try:
+            obj.scenePos()
+            return False
+        except (RuntimeError, AttributeError):
+            return True
+        
+sip = DummySip()
+
+from database import AnnotationDB, standardize_date
+
 
 class AnnotationFieldDialog(QDialog):
     """Dialog for selecting the field type for annotations"""
@@ -177,7 +192,7 @@ class PDFViewer(QGraphicsView):
                 self.scene.clear()
                 self.pages = []
                 self.page_items = []
-                self.annotations = []
+                self.annotations = []  # Clear annotations when loading a new document
                 self.current_page = 0
                 
                 # Render all pages
@@ -199,8 +214,10 @@ class PDFViewer(QGraphicsView):
         if not self.doc:
             return
         
-        # Clear scene
+        # Clear scene and reset page arrays
         self.scene.clear()
+        self.pages = []
+        self.page_items = []
         
         # Track total height for positioning
         total_height = 0
@@ -283,7 +300,7 @@ class PDFViewer(QGraphicsView):
             # Calculate initial zoom to make the document a readable size
             if first_page_width > 0 and view_width > 0:
                 # Target 90% of view width for the document
-                target_width_ratio = 0.9
+                target_width_ratio = a = 0.9
                 calculated_zoom = (view_width * target_width_ratio) / first_page_width
                 
                 # Use the calculated zoom, but keep it within reasonable bounds
@@ -329,9 +346,41 @@ class PDFViewer(QGraphicsView):
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(img)
         
-        # Update the stored pixmap and the graphics item
-        self.pages[page_idx]['pixmap'] = pixmap
-        self.page_items[page_idx].setPixmap(pixmap)
+        # Safety check: make sure page_items exists and is valid
+        if page_idx < len(self.pages) and page_idx < len(self.page_items):
+            # Update the stored pixmap
+            self.pages[page_idx]['pixmap'] = pixmap
+            
+            # Check if the page_items[page_idx] is still valid before updating
+            try:
+                # This will throw an exception if the object has been deleted
+                if not sip.isdeleted(self.page_items[page_idx]):
+                    self.page_items[page_idx].setPixmap(pixmap)
+            except (RuntimeError, NameError):
+                # Handle case where the object was deleted
+                print(f"Warning: QGraphicsPixmapItem for page {page_idx} is not valid anymore.")
+                # We'll need to recreate the page item
+                self.scene.removeItem(self.page_items[page_idx])
+                
+                # Create a new pixmap item
+                new_pixmap_item = QGraphicsPixmapItem(pixmap)
+                
+                # Position it at the same position as the original
+                pos_y = 0
+                if page_idx > 0:
+                    # Calculate position based on previous pages
+                    for i in range(page_idx):
+                        pos_y += self.pages[i]['pixmap'].height() + 20  # 20 is the page gap
+                
+                new_pixmap_item.setPos(0, pos_y)
+                new_pixmap_item.setData(0, page_idx)  # Store page number
+                new_pixmap_item.setFlag(QGraphicsPixmapItem.ItemIsSelectable, True)
+                
+                # Add to scene and update our references
+                self.scene.addItem(new_pixmap_item)
+                self.page_items[page_idx] = new_pixmap_item
+        else:
+            print(f"Warning: Page index {page_idx} is out of range.")
     
     def zoomIn(self):
         """Zoom in the view"""
@@ -808,6 +857,13 @@ class PDFViewer(QGraphicsView):
 class PDFViewerApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        
+        # Initialize the database
+        self.db = AnnotationDB()
+        
+        # Current file path
+        self.current_file = None
+        
         self.initUI()
         
         # Enable key press events for the main window
@@ -815,7 +871,7 @@ class PDFViewerApp(QMainWindow):
         
     def initUI(self):
         # Set window properties
-        self.setWindowTitle("PDF Viewer")
+        self.setWindowTitle("PDF Data Viewer")
         self.setGeometry(100, 100, 1200, 800)
         
         # Create central widget and main layout
@@ -872,6 +928,11 @@ class PDFViewerApp(QMainWindow):
         self.annotations_list.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.data_layout.addWidget(self.annotations_list)
         
+        # Add Export button to the data panel
+        self.export_button = QPushButton("Export Annotations to CSV")
+        self.export_button.clicked.connect(self.exportAnnotationsToCSV)
+        self.data_layout.addWidget(self.export_button)
+        
         self.data_panel.setWidget(self.data_content)
         
         # Connect signals
@@ -908,6 +969,13 @@ class PDFViewerApp(QMainWindow):
         open_action.setShortcut(QKeySequence.Open)
         open_action.triggered.connect(self.openFile)
         file_menu.addAction(open_action)
+        
+        # Export action
+        export_action = QAction("&Export Annotations to CSV", self)
+        export_action.triggered.connect(self.exportAnnotationsToCSV)
+        file_menu.addAction(export_action)
+        
+        file_menu.addSeparator()
         
         # Exit action
         exit_action = QAction("&Exit", self)
@@ -990,6 +1058,13 @@ class PDFViewerApp(QMainWindow):
         undo_btn.triggered.connect(self.undoLastAnnotation)
         toolbar.addAction(undo_btn)
         
+        # Export button
+        export_btn = QAction("Export to CSV", self)
+        export_btn.triggered.connect(self.exportAnnotationsToCSV)
+        toolbar.addAction(export_btn)
+        
+        toolbar.addSeparator()
+        
         # Render quality selector
         quality_label = QLabel("Quality:")
         toolbar.addWidget(quality_label)
@@ -1018,9 +1093,12 @@ class PDFViewerApp(QMainWindow):
         """Load a PDF file and display it"""
         # Show loading indicator
         self.statusBar().showMessage(f"Loading {os.path.basename(file_path)}...")
-        QApplication.processEvents()  # Update UI immediately
+        QApplication.processEvents()  # Allow UI to update
         
         if self.pdf_viewer.loadDocument(file_path):
+            # Store the current file path
+            self.current_file = file_path
+            
             self.statusBar().showMessage(f"Loaded: {os.path.basename(file_path)}")
             
             # Extract and display info from the PDF
@@ -1034,8 +1112,72 @@ class PDFViewerApp(QMainWindow):
                 # Set zoom slider to match current zoom
                 self.zoom_slider.setValue(int(self.pdf_viewer.zoom_factor * 100))
                 self.zoom_label.setText(f"{int(self.pdf_viewer.zoom_factor * 100)}%")
+                
+                # Load existing annotations from database AFTER initializing the view
+                # This ensures the PDF is fully loaded before annotations are added
+                self.loadAnnotationsFromDatabase()
+                
+                # Make sure to update the annotations list, even if there are no annotations
+                self.updateAnnotationsList()
         else:
             self.statusBar().showMessage(f"Failed to load PDF: {os.path.basename(file_path)}")
+    
+    def loadAnnotationsFromDatabase(self):
+        """Load annotations for the current PDF from the database"""
+        if not self.current_file or not self.pdf_viewer.doc:
+            return
+        
+        # Make sure the annotations list is cleared first (even if no annotations found)
+        self.pdf_viewer.annotations = []
+        
+        # Get annotations from database (using just filename matching)
+        db_annotations = self.db.get_annotations_for_file(self.current_file)
+        
+        if db_annotations:
+            print(f"Found {len(db_annotations)} annotations in database for {os.path.basename(self.current_file)}")
+            
+            # Add each annotation from the database
+            for db_annot in db_annotations:
+                # Convert rect tuple to fitz.Rect
+                rect_x0, rect_y0, rect_x1, rect_y1 = db_annot['rect']
+                rect = fitz.Rect(rect_x0, rect_y0, rect_x1, rect_y1)
+                
+                # Create annotation in same format as viewer expects
+                annot = {
+                    'id': db_annot['id'],
+                    'page': db_annot['page'],
+                    'rect': rect,
+                    'rect_str': db_annot['rect_str'],
+                    'text': db_annot['text'],
+                    'type': db_annot.get('type', ''),
+                    'field': db_annot.get('field', ''),
+                    'line_item_number': db_annot.get('line_item_number', ''),
+                    'file_name': db_annot.get('file_name', os.path.basename(self.current_file))
+                }
+                
+                # Add standardized date if present
+                if 'standardized_date' in db_annot:
+                    annot['standardized_date'] = db_annot['standardized_date']
+                
+                # Add to the viewer's annotations list
+                self.pdf_viewer.annotations.append(annot)
+                
+                # Add highlights to the PDF
+                page = self.pdf_viewer.doc[db_annot['page']]
+                page.add_highlight_annot(rect)
+                
+                # Render the page to show the highlight
+                self.pdf_viewer.renderPage(db_annot['page'])
+            
+            # Force update the annotations list in the UI
+            QApplication.processEvents()  # Process any pending events
+            self.updateAnnotationsList()
+            self.statusBar().showMessage(f"Loaded {len(db_annotations)} annotations from database")
+        else:
+            print(f"No annotations found in database for {os.path.basename(self.current_file)}")
+            # Make sure to update the annotations list even if no annotations were found
+            self.updateAnnotationsList()
+            self.statusBar().showMessage(f"No annotations found for {os.path.basename(self.current_file)}")
     
     def updateDataPanel(self):
         """Update the data panel with information from the PDF"""
@@ -1056,17 +1198,14 @@ class PDFViewerApp(QMainWindow):
             if metadata.get('subject'):
                 info_text += f"Subject: {metadata.get('subject')}\n"
                 
-        # Display the text from the current page
-        current_page_text = self.pdf_viewer.getCurrentPageText()
-        
         # Update the information label
         self.data_label.setText(info_text)
         
-        # Reset the annotations list
-        self.annotations_list.setRowCount(0)
-        
         # Clear the selected text display
         self.selected_text_display.setText("No text selected")
+        
+        # Clear the annotations list
+        self.annotations_list.setRowCount(0)
     
     def onTextSelected(self, text):
         """Handle text selection event from the PDF viewer"""
@@ -1075,6 +1214,17 @@ class PDFViewerApp(QMainWindow):
     
     def onAnnotationAdded(self, annotation):
         """Handle annotation added event with field information"""
+        # Add to database if we have a file loaded
+        if self.current_file:
+            annotation_id = self.db.add_annotation(self.current_file, annotation)
+            
+            # Store the database ID with the annotation
+            if annotation_id:
+                # Find the annotation in our list (should be the last one)
+                if annotation == self.pdf_viewer.annotations[-1]:
+                    self.pdf_viewer.annotations[-1]['id'] = annotation_id
+        
+        # Update the UI
         self.updateAnnotationsList()
     
     def updateAnnotationsList(self):
@@ -1085,8 +1235,16 @@ class PDFViewerApp(QMainWindow):
         # Clear the list
         self.annotations_list.setRowCount(0)
         
+        # Print debug info
+        print(f"Updating annotations list with {len(self.pdf_viewer.annotations)} annotations")
+        
         # Add each annotation to the list
         for i, annot in enumerate(self.pdf_viewer.annotations):
+            # Skip annotations that don't have required fields
+            if 'page' not in annot or 'text' not in annot or 'rect_str' not in annot:
+                print(f"Skipping invalid annotation: {annot}")
+                continue
+                
             row_position = self.annotations_list.rowCount()
             self.annotations_list.insertRow(row_position)
             
@@ -1110,23 +1268,95 @@ class PDFViewerApp(QMainWindow):
             rect_item = QTableWidgetItem(annot['rect_str'])
             self.annotations_list.setItem(row_position, 4, rect_item)
             
+            # Determine text to display - use standardized date if available for date fields
+            display_text = annot['text']
+            date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
+            
+            if annot.get('field') in date_fields:
+                # For date fields, try to get standardized date
+                if 'standardized_date' in annot and annot['standardized_date']:
+                    display_text = f"{annot['text']} → {annot['standardized_date']}"
+                else:
+                    # Try to standardize it now if it wasn't already
+                    std_date = standardize_date(annot['text'])
+                    if std_date:
+                        display_text = f"{annot['text']} → {std_date}"
+                        # Store the standardized date in the annotation
+                        annot['standardized_date'] = std_date
+            
             # Add annotation text (truncated if too long)
-            text = annot['text']
-            if len(text) > 50:
-                text = text[:47] + "..."
-            text_item = QTableWidgetItem(text)
+            if len(display_text) > 50:
+                display_text = display_text[:47] + "..."
+            text_item = QTableWidgetItem(display_text)
             self.annotations_list.setItem(row_position, 5, text_item)
+            
+            # Create a stable reference to the current index 
+            current_index = i  # Capture current value of i
             
             # Add delete button
             delete_button = QPushButton("[x]")
             delete_button.setFixedWidth(30)
-            delete_button.clicked.connect(lambda checked, index=i: self.onDeleteAnnotation(index))
+            # Create a function that captures the current index
+            delete_func = lambda checked, idx=current_index: self.onDeleteAnnotation(idx)
+            delete_button.clicked.connect(delete_func)
             self.annotations_list.setCellWidget(row_position, 6, delete_button)
+        
+        # Make sure all columns are properly sized
+        self.annotations_list.resizeColumnsToContents()
+        
+        # Force UI update
+        QApplication.processEvents()
     
     def onDeleteAnnotation(self, index):
         """Handle delete button click for a specific annotation"""
+        if not self.pdf_viewer.annotations or index >= len(self.pdf_viewer.annotations):
+            self.statusBar().showMessage(f"Invalid annotation index: {index}")
+            return
+        
+        # Get the annotation to delete
+        annotation = self.pdf_viewer.annotations[index]
+        
+        # Remove from database if we have an ID
+        if 'id' in annotation:
+            success = self.db.remove_annotation(annotation['id'])
+            if not success:
+                self.statusBar().showMessage(f"Failed to remove annotation {index} from database")
+                
+        # Print information for debugging
+        print(f"Deleting annotation: index={index}, id={annotation.get('id', 'unknown')}, page={annotation.get('page', 'unknown')}")
+        
+        # Remove from the PDF
         if self.pdf_viewer.removeAnnotationByIndex(index):
+            # Update the UI
             self.updateAnnotationsList()
+            self.statusBar().showMessage(f"Annotation {index} deleted")
+        else:
+            self.statusBar().showMessage(f"Failed to remove annotation {index} from PDF")
+    
+    def exportAnnotationsToCSV(self):
+        """Export annotations for the current PDF to CSV"""
+        if not self.current_file:
+            QMessageBox.warning(self, "Export Error", "No PDF file is currently loaded.")
+            return
+        
+        # Get filename for export
+        file_name = os.path.basename(self.current_file).replace(".pdf", "_annotations.csv")
+        output_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Annotations to CSV", file_name, "CSV Files (*.csv)"
+        )
+        
+        if not output_path:
+            return
+        
+        # Export using the database
+        success = self.db.export_annotations_to_csv(self.current_file, output_path)
+        
+        if success:
+            QMessageBox.information(self, "Export Successful", 
+                                  f"Annotations exported to {output_path}")
+        else:
+            QMessageBox.warning(self, "Export Failed", 
+                              "Failed to export annotations or no annotations to export.")
     
     # PDF control methods
     def zoomIn(self):
@@ -1165,7 +1395,10 @@ class PDFViewerApp(QMainWindow):
             
         # Get the last annotation
         last_annot = self.pdf_viewer.annotations.pop()
-        print(f"Last annotation on page: {last_annot['page']}")
+        
+        # Remove from database if it has an ID
+        if 'id' in last_annot:
+            self.db.remove_annotation(last_annot['id'])
         
         # Use the PDFViewer's method to remove the last annotation
         if self.pdf_viewer.removeAnnotation(last_annot['page']):
@@ -1276,6 +1509,12 @@ class PDFViewerApp(QMainWindow):
         if hasattr(self, 'pdf_viewer') and self.pdf_viewer.doc and not self.pdf_viewer.initial_zoom_set:
             # This will help ensure good initial sizing on first load
             self.pdf_viewer.resetView()
+    
+    def closeEvent(self, event):
+        """Handle window close event to properly close the database"""
+        if hasattr(self, 'db'):
+            self.db.close()
+        event.accept()
 
 
 def main():
