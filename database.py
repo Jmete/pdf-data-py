@@ -7,8 +7,16 @@ def standardize_date(date_str):
     """Convert various date formats to YYYY-MM-DD"""
     if not date_str:
         return None
+        
+    # Clean the date string by removing brackets and extra whitespace
+    cleaned_date_str = date_str.replace('[', '').replace(']', '').strip()
+    
+    # If the string is empty after cleaning, return None
+    if not cleaned_date_str:
+        return None
+    
     try:
-        date_obj = parse(date_str)
+        date_obj = parse(cleaned_date_str)
         return date_obj.strftime("%Y-%m-%d")
     except Exception as e:
         print(f"Error parsing date: {e}")
@@ -77,8 +85,12 @@ class AnnotationDB:
             standardized_date = None
             
             if field_name in date_fields and annotation['text']:
-                # Try to convert the date
-                standardized_date = standardize_date(annotation['text'])
+                # Use standardized_date if it's already in the annotation
+                if 'standardized_date' in annotation and annotation['standardized_date']:
+                    standardized_date = annotation['standardized_date']
+                else:
+                    # Try to convert the date
+                    standardized_date = standardize_date(annotation['text'])
             
             # Insert into annotations table
             self.cursor.execute('''
@@ -149,19 +161,49 @@ class AnnotationDB:
     def remove_annotation(self, annotation_id):
         """Remove an annotation from the database"""
         try:
+            # Check if annotation exists before deleting
+            self.cursor.execute('SELECT id FROM annotations WHERE id = ?', (annotation_id,))
+            if not self.cursor.fetchone():
+                print(f"Warning: Annotation ID {annotation_id} not found in database")
+                return False
+                
+            # Perform the deletion
             self.cursor.execute('DELETE FROM annotations WHERE id = ?', (annotation_id,))
+            rows_affected = self.cursor.rowcount
             self.conn.commit()
-            return True
+            
+            # Verify deletion
+            if rows_affected > 0:
+                print(f"Successfully deleted annotation ID {annotation_id} from database")
+                return True
+            else:
+                print(f"No rows affected when deleting annotation ID {annotation_id}")
+                return False
+                
         except sqlite3.Error as e:
             print(f"Error removing annotation: {str(e)}")
+            self.conn.rollback()  # Rollback on error
             return False
     
     def export_annotations_to_csv(self, file_path, output_path):
         """Export annotations for a file to CSV"""
         try:
-            annotations = self.get_annotations_for_file(file_path)
+            # Get annotations directly from the database to ensure we have the most current data
+            file_name = os.path.basename(file_path)
             
-            if not annotations:
+            self.cursor.execute('''
+            SELECT id, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
+                   annotation_text, annotation_type, field_name, line_item_number,
+                   standardized_date, file_name
+            FROM annotations
+            WHERE file_name = ?
+            ORDER BY id
+            ''', (file_name,))
+            
+            rows = self.cursor.fetchall()
+            
+            if not rows:
+                print(f"No annotations found in database for {file_name}")
                 return False
             
             with open(output_path, 'w', newline='') as csvfile:
@@ -173,26 +215,24 @@ class AnnotationDB:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 
-                for annot in annotations:
-                    # Parse the rect tuple
-                    rect_x0, rect_y0, rect_x1, rect_y1 = annot['rect']
-                    
-                    row = {
-                        'id': annot['id'],
-                        'file_name': annot['file_name'],
-                        'page': annot['page'] + 1,  # +1 for human-readable page numbers
-                        'type': annot['type'],
-                        'field': annot['field'],
-                        'line_item_number': annot['line_item_number'],
-                        'rect_x0': rect_x0,
-                        'rect_y0': rect_y0,
-                        'rect_x1': rect_x1,
-                        'rect_y1': rect_y1,
-                        'text': annot['text'],
-                        'standardized_date': annot.get('standardized_date', '')
+                for row in rows:
+                    row_dict = {
+                        'id': row[0],
+                        'file_name': row[11],
+                        'page': row[1] + 1,  # +1 for human-readable page numbers
+                        'type': row[7],
+                        'field': row[8],
+                        'line_item_number': row[9],
+                        'rect_x0': row[2],
+                        'rect_y0': row[3],
+                        'rect_x1': row[4],
+                        'rect_y1': row[5],
+                        'text': row[6],
+                        'standardized_date': row[10] if row[10] else ''
                     }
-                    writer.writerow(row)
+                    writer.writerow(row_dict)
             
+            print(f"Successfully exported {len(rows)} annotations to {output_path}")
             return True
             
         except Exception as e:

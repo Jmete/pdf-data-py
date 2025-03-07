@@ -455,6 +455,14 @@ class PDFViewer(QGraphicsView):
             return page_idx, (pdf_x, pdf_y)
         return -1, None
     
+    def cleanTextForDateField(self, text, field_type):
+        """Clean text for date fields by removing brackets"""
+        date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
+        if field_type in date_fields:
+            # Remove brackets from text
+            return text.replace('[', '').replace(']', '').strip()
+        return text
+    
     def selectTextInRegion(self, page_idx, start_pos, end_pos):
         """Select text in the specified region on the given page"""
         if not self.doc or page_idx < 0 or page_idx >= self.page_count:
@@ -497,6 +505,11 @@ class PDFViewer(QGraphicsView):
                 # Remember the line item number for next time
                 if field_info['type'] == 'line_item' and field_info['line_item_number']:
                     self.last_line_item_number = field_info['line_item_number']
+                
+                # Clean text for date fields
+                cleaned_text = self.cleanTextForDateField(text, field_info['field'])
+                if cleaned_text != text:
+                    self.annotations[-1]['text'] = cleaned_text
                 
                 # Update the annotation with field info
                 self.annotations[-1].update(field_info)
@@ -603,6 +616,11 @@ class PDFViewer(QGraphicsView):
             if field_info['type'] == 'line_item' and field_info['line_item_number']:
                 self.last_line_item_number = field_info['line_item_number']
             
+            # Clean text for date fields
+            cleaned_text = self.cleanTextForDateField(text, field_info['field'])
+            if cleaned_text != text:
+                self.annotations[-1]['text'] = cleaned_text
+            
             # Update the annotation with field info
             self.annotations[-1].update(field_info)
             
@@ -615,7 +633,7 @@ class PDFViewer(QGraphicsView):
         
         return text
     
-    def removeAnnotation(self, page_idx, annot_id=None):
+    def removeAnnotation(self, page_idx, annot_idx=None):
         """Remove a specific annotation from a page"""
         if not self.doc or page_idx < 0 or page_idx >= self.page_count:
             return False
@@ -626,8 +644,13 @@ class PDFViewer(QGraphicsView):
             # Get all annotations on the page and convert to a list (important!)
             annotations = list(page.annots())
             if annotations and len(annotations) > 0:
-                # Always remove the last annotation on the page
-                page.delete_annot(annotations[-1])
+                if annot_idx is not None and 0 <= annot_idx < len(annotations):
+                    # Remove the specific annotation if an index is provided
+                    page.delete_annot(annotations[annot_idx])
+                else:
+                    # Default to removing the last annotation on the page
+                    page.delete_annot(annotations[-1])
+                
                 # Re-render the page
                 self.renderPage(page_idx)
                 # Emit signal that an annotation was removed
@@ -668,8 +691,19 @@ class PDFViewer(QGraphicsView):
         annot_to_remove = self.annotations[index]
         page_idx = annot_to_remove['page']
         
-        # Remove from the document
-        result = self.removeAnnotation(page_idx)
+        # Count which annotation on the page this is
+        # Find all annotations on this page and their indices
+        page_annotations = [(i, a) for i, a in enumerate(self.annotations) if a['page'] == page_idx]
+        
+        # Find the position of our annotation within that page's annotations
+        annot_position = None
+        for i, (list_idx, annot) in enumerate(page_annotations):
+            if list_idx == index:
+                annot_position = i
+                break
+        
+        # Remove from the document using the position on the page
+        result = self.removeAnnotation(page_idx, annot_position)
         
         if result:
             # Remove from the annotations list
@@ -824,6 +858,11 @@ class PDFViewer(QGraphicsView):
                         for i in range(start_page_idx, end_page_idx + 1):
                             annot_idx = len(self.annotations) - (end_page_idx - start_page_idx + 1) + (i - start_page_idx)
                             if 0 <= annot_idx < len(self.annotations):
+                                # Clean text for date fields if needed
+                                if field_info['field'] in ['rfq_date', 'due_date', 'requested_delivery_date']:
+                                    cleaned_text = self.cleanTextForDateField(self.annotations[annot_idx]['text'], field_info['field'])
+                                    self.annotations[annot_idx]['text'] = cleaned_text
+                                
                                 self.annotations[annot_idx].update(field_info)
                         
                         # Emit signal that an annotation was added
@@ -915,17 +954,17 @@ class PDFViewerApp(QMainWindow):
         self.data_layout.addWidget(self.annotations_label)
         
         self.annotations_list = QTableWidget()
-        self.annotations_list.setColumnCount(7)  # Updated columns to include field info
+        # Updated columns - removed Rect column
+        self.annotations_list.setColumnCount(6)
         self.annotations_list.setHorizontalHeaderLabels(
-            ["Page", "Type", "Item #", "Field", "Rect", "Text", "Delete"]
+            ["Page", "Type", "Item #", "Field", "Text", "Delete"]
         )
         self.annotations_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.data_layout.addWidget(self.annotations_list)
         
         # Add Export button to the data panel
@@ -1214,6 +1253,26 @@ class PDFViewerApp(QMainWindow):
     
     def onAnnotationAdded(self, annotation):
         """Handle annotation added event with field information"""
+        date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
+        
+        # Check if this is a date field and try to standardize it
+        if annotation.get('field') in date_fields:
+            # Try to standardize the date
+            standardized_date = standardize_date(annotation['text'])
+            
+            # If standardization failed, show an alert to the user
+            if not standardized_date:
+                QMessageBox.warning(
+                    self,
+                    "Date Standardization Failed",
+                    f"Could not standardize the date: '{annotation['text']}'\n\n"
+                    "The text you selected might not be a valid date format.\n"
+                    "You may want to undo this annotation and try again with a different selection."
+                )
+            else:
+                # Store the standardized date in the annotation
+                annotation['standardized_date'] = standardized_date
+        
         # Add to database if we have a file loaded
         if self.current_file:
             annotation_id = self.db.add_annotation(self.current_file, annotation)
@@ -1228,7 +1287,7 @@ class PDFViewerApp(QMainWindow):
         self.updateAnnotationsList()
     
     def updateAnnotationsList(self):
-        """Update the annotations list in the data panel with field info"""
+        """Update the annotations list in the data panel without showing Rect info"""
         if not self.pdf_viewer.doc:
             return
             
@@ -1241,7 +1300,7 @@ class PDFViewerApp(QMainWindow):
         # Add each annotation to the list
         for i, annot in enumerate(self.pdf_viewer.annotations):
             # Skip annotations that don't have required fields
-            if 'page' not in annot or 'text' not in annot or 'rect_str' not in annot:
+            if 'page' not in annot or 'text' not in annot:
                 print(f"Skipping invalid annotation: {annot}")
                 continue
                 
@@ -1264,10 +1323,6 @@ class PDFViewerApp(QMainWindow):
             field_item = QTableWidgetItem(annot.get('field', ''))
             self.annotations_list.setItem(row_position, 3, field_item)
             
-            # Add rect information
-            rect_item = QTableWidgetItem(annot['rect_str'])
-            self.annotations_list.setItem(row_position, 4, rect_item)
-            
             # Determine text to display - use standardized date if available for date fields
             display_text = annot['text']
             date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
@@ -1288,7 +1343,7 @@ class PDFViewerApp(QMainWindow):
             if len(display_text) > 50:
                 display_text = display_text[:47] + "..."
             text_item = QTableWidgetItem(display_text)
-            self.annotations_list.setItem(row_position, 5, text_item)
+            self.annotations_list.setItem(row_position, 4, text_item)
             
             # Create a stable reference to the current index 
             current_index = i  # Capture current value of i
@@ -1299,7 +1354,7 @@ class PDFViewerApp(QMainWindow):
             # Create a function that captures the current index
             delete_func = lambda checked, idx=current_index: self.onDeleteAnnotation(idx)
             delete_button.clicked.connect(delete_func)
-            self.annotations_list.setCellWidget(row_position, 6, delete_button)
+            self.annotations_list.setCellWidget(row_position, 5, delete_button)
         
         # Make sure all columns are properly sized
         self.annotations_list.resizeColumnsToContents()
@@ -1316,20 +1371,23 @@ class PDFViewerApp(QMainWindow):
         # Get the annotation to delete
         annotation = self.pdf_viewer.annotations[index]
         
-        # Remove from database if we have an ID
-        if 'id' in annotation:
-            success = self.db.remove_annotation(annotation['id'])
-            if not success:
-                self.statusBar().showMessage(f"Failed to remove annotation {index} from database")
-                
         # Print information for debugging
         print(f"Deleting annotation: index={index}, id={annotation.get('id', 'unknown')}, page={annotation.get('page', 'unknown')}")
         
-        # Remove from the PDF
+        # First remove from the PDF
         if self.pdf_viewer.removeAnnotationByIndex(index):
+            # Then remove from database if we have an ID
+            if 'id' in annotation:
+                success = self.db.remove_annotation(annotation['id'])
+                if success:
+                    self.statusBar().showMessage(f"Annotation {index} deleted")
+                else:
+                    self.statusBar().showMessage(f"Warning: Annotation removed from PDF but failed to delete from database")
+            else:
+                self.statusBar().showMessage(f"Annotation {index} deleted (no database ID)")
+                
             # Update the UI
             self.updateAnnotationsList()
-            self.statusBar().showMessage(f"Annotation {index} deleted")
         else:
             self.statusBar().showMessage(f"Failed to remove annotation {index} from PDF")
     
@@ -1396,17 +1454,21 @@ class PDFViewerApp(QMainWindow):
         # Get the last annotation
         last_annot = self.pdf_viewer.annotations.pop()
         
-        # Remove from database if it has an ID
-        if 'id' in last_annot:
-            self.db.remove_annotation(last_annot['id'])
-        
         # Use the PDFViewer's method to remove the last annotation
         if self.pdf_viewer.removeAnnotation(last_annot['page']):
+            # Remove from database if it has an ID
+            if 'id' in last_annot:
+                success = self.db.remove_annotation(last_annot['id'])
+                if not success:
+                    print(f"Warning: Failed to remove annotation ID {last_annot.get('id')} from database")
+            
             # Update the annotations list
             self.updateAnnotationsList()
             self.statusBar().showMessage("Last annotation removed")
             return True
         else:
+            # If we failed to remove from PDF, put the annotation back in the list
+            self.pdf_viewer.annotations.append(last_annot)
             self.statusBar().showMessage("Failed to remove annotation")
             return False
     
