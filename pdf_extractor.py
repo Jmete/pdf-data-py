@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QSplitter, QVBoxLayout
                               QHBoxLayout, QWidget, QScrollArea, QToolBar, 
                               QFileDialog, QLabel, QPushButton, QGraphicsView,
                               QGraphicsScene, QGraphicsPixmapItem, QTableWidget,
-                              QTableWidgetItem, QSlider, QComboBox, QMessageBox)
+                              QTableWidgetItem, QSlider, QComboBox, QMessageBox,
+                              QHeaderView)
 from PySide6.QtCore import Qt, QRectF, Signal, QSize, QPoint, QPointF, QSizeF, QEvent
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QPixmap, QImage, 
                           QCursor, QTransform, QColor, QPen, QBrush, QPainter)
@@ -320,10 +321,11 @@ class PDFViewer(QGraphicsView):
         if text:
             highlight = page.add_highlight_annot(rect)
             
-            # Store annotation info
+            # Store annotation info with rect details
             self.annotations.append({
                 'page': page_idx,
                 'rect': rect,
+                'rect_str': f"({rect.x0:.2f}, {rect.y0:.2f}, {rect.x1:.2f}, {rect.y1:.2f})",
                 'text': text,
                 'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
             })
@@ -404,10 +406,11 @@ class PDFViewer(QGraphicsView):
         # Create annotation
         annot = page.add_highlight_annot(pdf_rect)
         
-        # Store annotation
+        # Store annotation with rect details
         self.annotations.append({
             'page': page_idx,
             'rect': pdf_rect,
+            'rect_str': f"({pdf_rect.x0:.2f}, {pdf_rect.y0:.2f}, {pdf_rect.x1:.2f}, {pdf_rect.y1:.2f})",
             'text': text,
             'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
         })
@@ -461,6 +464,28 @@ class PDFViewer(QGraphicsView):
             self.statusUpdated.emit("Last annotation removed")
         else:
             self.statusUpdated.emit("Failed to remove annotation")
+        return result
+    
+    def removeAnnotationByIndex(self, index):
+        """Remove a specific annotation by its index in the annotations list"""
+        if not self.annotations or index < 0 or index >= len(self.annotations):
+            self.statusUpdated.emit("Invalid annotation index")
+            return False
+            
+        # Get the annotation to remove
+        annot_to_remove = self.annotations[index]
+        page_idx = annot_to_remove['page']
+        
+        # Remove from the document
+        result = self.removeAnnotation(page_idx)
+        
+        if result:
+            # Remove from the annotations list
+            self.annotations.pop(index)
+            self.statusUpdated.emit(f"Annotation {index} removed")
+        else:
+            self.statusUpdated.emit(f"Failed to remove annotation {index}")
+            
         return result
     
     # Event handlers for mouse interaction
@@ -577,9 +602,11 @@ class PDFViewer(QGraphicsView):
                         
                         # Add highlight annotation
                         highlight = page.add_highlight_annot(page_rect)
+                        # Store annotation with rect details
                         self.annotations.append({
                             'page': page_idx,
                             'rect': page_rect,
+                            'rect_str': f"({page_rect.x0:.2f}, {page_rect.y0:.2f}, {page_rect.x1:.2f}, {page_rect.y1:.2f})",
                             'text': text,
                             'annot_id': len(self.annotations)  # Use a unique ID instead of a reference
                         })
@@ -661,9 +688,12 @@ class PDFViewerApp(QMainWindow):
         self.data_layout.addWidget(self.annotations_label)
         
         self.annotations_list = QTableWidget()
-        self.annotations_list.setColumnCount(2)
-        self.annotations_list.setHorizontalHeaderLabels(["Page", "Text"])
-        self.annotations_list.horizontalHeader().setStretchLastSection(True)
+        self.annotations_list.setColumnCount(4)  # Updated to include Rect and Delete button
+        self.annotations_list.setHorizontalHeaderLabels(["Page", "Rect", "Text", "Delete"])
+        self.annotations_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.annotations_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.data_layout.addWidget(self.annotations_list)
         
         self.data_panel.setWidget(self.data_content)
@@ -690,8 +720,6 @@ class PDFViewerApp(QMainWindow):
         
         # Set as the central widget to receive key events
         self.pdf_viewer.setFocus()
-        
-        # We'll rely on keyPressEvent instead of event filter
     
     def createMenuBar(self):
         menubar = self.menuBar()
@@ -873,7 +901,7 @@ class PDFViewerApp(QMainWindow):
             self.updateAnnotationsList()
     
     def updateAnnotationsList(self):
-        """Update the annotations list in the data panel"""
+        """Update the annotations list in the data panel with rect details and delete buttons"""
         if not self.pdf_viewer.doc:
             return
             
@@ -889,12 +917,27 @@ class PDFViewerApp(QMainWindow):
             page_item = QTableWidgetItem(str(annot['page'] + 1))  # +1 for human-readable page numbers
             self.annotations_list.setItem(row_position, 0, page_item)
             
+            # Add rect information
+            rect_item = QTableWidgetItem(annot['rect_str'])
+            self.annotations_list.setItem(row_position, 1, rect_item)
+            
             # Add annotation text (truncated if too long)
             text = annot['text']
             if len(text) > 50:
                 text = text[:47] + "..."
             text_item = QTableWidgetItem(text)
-            self.annotations_list.setItem(row_position, 1, text_item)
+            self.annotations_list.setItem(row_position, 2, text_item)
+            
+            # Add delete button
+            delete_button = QPushButton("[x]")
+            delete_button.setFixedWidth(30)
+            delete_button.clicked.connect(lambda checked, index=i: self.onDeleteAnnotation(index))
+            self.annotations_list.setCellWidget(row_position, 3, delete_button)
+    
+    def onDeleteAnnotation(self, index):
+        """Handle delete button click for a specific annotation"""
+        if self.pdf_viewer.removeAnnotationByIndex(index):
+            self.updateAnnotationsList()
     
     # PDF control methods
     def zoomIn(self):
@@ -1020,8 +1063,6 @@ class PDFViewerApp(QMainWindow):
         else:
             # For all other key events, pass to parent implementation
             super().keyPressEvent(event)
-        
-    # We're not using eventFilter anymore, relying on keyPressEvent instead
     
     # Drag and drop event handlers
     def dragEnterEvent(self, event):
