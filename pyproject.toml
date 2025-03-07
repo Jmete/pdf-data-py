@@ -1,14 +1,43 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "pdf-extractor-v2"
-version = "0.1.0"
-description = "Add your description here"
+name = "pdf_data_viewer"
+version = "0.2.0"
+description = "A PDF viewer with data extraction capabilities"
 readme = "README.md"
-requires-python = ">=3.10"
+authors = [
+    {name = "James Mete", email = "james@jamesmete.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.9"
 dependencies = [
-    "matplotlib>=3.10.1",
-    "numpy>=2.2.3",
-    "pandas>=2.2.3",
     "pymupdf>=1.25.3",
     "pyside6>=6.8.2.1",
-    "sip>=6.10.0",
+    "python-dateutil>=2.8.2",
 ]
+
+[project.scripts]
+pdf-data-viewer = "pdf_data_viewer.main:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

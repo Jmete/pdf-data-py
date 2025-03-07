@@ -13,6 +13,8 @@ wheels/
 
 # Folders to ignore
 example_files/
+data/
+logs/
 
 # Virtual environments
 .venv

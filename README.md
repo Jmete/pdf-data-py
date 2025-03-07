@@ -1,62 +1,93 @@
-# PDF Data Py
+# PDF Data Viewer
 
-## Summary
-We are building a PDF viewer app in python that should be able to run on multiple platforms, including Windows.
+A Python application for viewing PDF files and extracting structured data through annotations.
 
-## Goals & Requirements
-The requirements include:
-- GUI app that has a menu bar at top, and 2 panels below.
-- Left panel will be a PDF viewer, Right panel will show the data extracted from the PDF
-- Left panel should take up 2/3 of the space by default, and the right panel should be 1/3 of the space by default.
-- The user should be able to drag the middle divider splitter and be able to drag it to adjust the size of the panels.
-- The PDF viewer should allow the user to drag-and-drop a PDF file onto the panel to open it, or simply click file -> open.
-- The PDF viewer should ideally be able to show all the pages at once as a vertical scrollable view
-- It should display the PDF with high-quality and not be blurry when zoomed out. It should look similar to when you view a PDF in Google Chrome.
-- The overall app should be aesthetically pleasing and look like a modern desktop app.
-- PDF viewing controls should be the following:
--- The user should be able to zoom (with ctrl+mousewheel)
--- The user should be able to drag to move around (with holding left click)
--- The user should be able to scroll down the PDF file (if multiple pages) with the mousewheel.
--- The user should be able to draw annotation boxes that are compatible with pymupdf (with ctrl+leftclick to draw the annotation boxes)
--- Ideally the user should be able to draw the annotation boxes by actually highlighting the text, like you can do in Google Chrome or Adobe Acrobat.
--- I want to display the PDF with selectable text. 
--- There should also be button controls for zooming in [+] and out [-].
--- The annotation data should be saved to a SQLite database as a backend
--- The user should be able to export the annotation data for the current PDF being read to a CSV file
--- Dates extracted from the PDFs should be converted to YYYY-MM-DD format
--- SQLite should have a primary unique auto-incrementing index following best practices
--- Each row in the database will be 1 specific annotation. It should include the file_name as well as the regular annotation data stored in it, including the extracted Rect() data for that annotation.
--- All other fields except for dates and not should be stored as strings, including line_item_number
+## Features
 
-## Preferred libraries
-I prefer to use the following libraries:
-- pymupdf
+- High-quality PDF viewing with support for multiple pages
+- Text selection and annotation capabilities
+- Data extraction from PDFs with field mapping
+- Date standardization for extracted data
+- SQLite database storage for annotations
+- CSV export for extracted data
+
+## Requirements
+
+- Python 3.9+
 - PySide6
+- PyMuPDF (fitz)
+- python-dateutil
 
-If the above libraries do not support a feature that I want to add, then please let me know and suggest a proper alternative. 
+## Installation
 
-## Data to Extract
-<data to extract>
-<meta data>
-- document_name
-- customer_name
-- buyer_name
-- currency
-- rfq_date
-- due_date
-</meta data>
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/pdf-data-py.git
+cd pdf-data-py
+```
 
-<line item data>
-- line_item_number
-- material_number
-- part_number
-- description
-- full_description
-- quantity
-- unit_of_measure
-- requested_delivery_date
-- delivery_point
-- manufacturer_name
-</line item data>
-</data to extract>
+2. Install the package:
+```bash
+pip install -e .
+```
 
+## Usage
+
+Run the application:
+```bash
+python -m pdf_data_viewer.main
+```
+
+Or use the entry point:
+```bash
+pdf-data-viewer
+```
+
+## Data Extraction
+
+The application supports the extraction of the following data types:
+
+### Metadata
+- Document name
+- Customer name
+- Buyer name
+- Currency
+- RFQ date
+- Due date
+
+### Line Item Data
+- Line item number
+- Material number
+- Part number
+- Description
+- Full description
+- Quantity
+- Unit of measure
+- Requested delivery date
+- Delivery point
+- Manufacturer name
+
+## Development
+
+### Project Structure
+```
+pdf-data-py/
+├── data/                     # Data directory
+│   ├── annotations.db        # SQLite database file
+│   └── exports/              # CSV export directory
+└── pdf_data_viewer/          # Main package
+    ├── core/                 # Core functionality
+    ├── database/             # Database operations
+    ├── ui/                   # User interface
+    └── utils/                # Utility functions
+```
+
+### Building from source
+
+```bash
+python setup.py build
+```
+
+## License
+
+[MIT License](LICENSE)
