@@ -1,32 +1,21 @@
+"""Database models for the PDF Data Viewer application."""
+
 import sqlite3
 import os
 import csv
-from dateutil.parser import parse
-
-def standardize_date(date_str):
-    """Convert various date formats to YYYY-MM-DD"""
-    if not date_str:
-        return None
-        
-    # Clean the date string by removing brackets and extra whitespace
-    cleaned_date_str = date_str.replace('[', '').replace(']', '').strip()
-    
-    # If the string is empty after cleaning, return None
-    if not cleaned_date_str:
-        return None
-    
-    try:
-        date_obj = parse(cleaned_date_str)
-        return date_obj.strftime("%Y-%m-%d")
-    except Exception as e:
-        print(f"Error parsing date: {e}")
-        return None
+from ..utils.date_utils import standardize_date
+from ..config import DB_PATH
 
 class AnnotationDB:
-    """SQLite database handler for PDF annotations"""
+    """SQLite database handler for PDF annotations."""
     
-    def __init__(self, db_path="annotations.db"):
-        """Initialize the database connection"""
+    def __init__(self, db_path=DB_PATH):
+        """
+        Initialize the database connection.
+        
+        Args:
+            db_path (str): Path to the SQLite database file
+        """
         self.db_path = db_path
         self.conn = None
         self.cursor = None
@@ -34,7 +23,7 @@ class AnnotationDB:
         self.create_tables()
     
     def connect(self):
-        """Connect to the SQLite database"""
+        """Connect to the SQLite database."""
         try:
             self.conn = sqlite3.connect(self.db_path)
             # Enable foreign key support
@@ -44,7 +33,7 @@ class AnnotationDB:
             print(f"Database connection error: {str(e)}")
     
     def create_tables(self):
-        """Create necessary tables if they don't exist"""
+        """Create necessary tables if they don't exist."""
         try:
             # Create annotations table
             self.cursor.execute('''
@@ -70,7 +59,16 @@ class AnnotationDB:
             print(f"Error creating tables: {str(e)}")
     
     def add_annotation(self, file_path, annotation):
-        """Add a new annotation to the database"""
+        """
+        Add a new annotation to the database.
+        
+        Args:
+            file_path (str): Path to the PDF file
+            annotation (dict): Annotation data
+            
+        Returns:
+            int or None: ID of the new annotation or None if failed
+        """
         try:
             # Extract just the filename (not the full path)
             file_name = os.path.basename(file_path)
@@ -118,7 +116,15 @@ class AnnotationDB:
             return None
     
     def get_annotations_for_file(self, file_path):
-        """Get all annotations for a specific PDF file using just the filename"""
+        """
+        Get all annotations for a specific PDF file.
+        
+        Args:
+            file_path (str): Path to the PDF file
+            
+        Returns:
+            list: List of annotation dictionaries
+        """
         try:
             # Extract just the filename (not the full path)
             file_name = os.path.basename(file_path)
@@ -159,7 +165,15 @@ class AnnotationDB:
             return []
     
     def remove_annotation(self, annotation_id):
-        """Remove an annotation from the database"""
+        """
+        Remove an annotation from the database.
+        
+        Args:
+            annotation_id (int): ID of the annotation to remove
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
             # Check if annotation exists before deleting
             self.cursor.execute('SELECT id FROM annotations WHERE id = ?', (annotation_id,))
@@ -186,7 +200,16 @@ class AnnotationDB:
             return False
     
     def export_annotations_to_csv(self, file_path, output_path):
-        """Export annotations for a file to CSV"""
+        """
+        Export annotations for a file to CSV.
+        
+        Args:
+            file_path (str): Path to the PDF file
+            output_path (str): Path to save the CSV file
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
             # Get annotations directly from the database to ensure we have the most current data
             file_name = os.path.basename(file_path)
@@ -205,6 +228,9 @@ class AnnotationDB:
             if not rows:
                 print(f"No annotations found in database for {file_name}")
                 return False
+            
+            # Make sure the export directory exists
+            os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
             
             with open(output_path, 'w', newline='') as csvfile:
                 fieldnames = [
@@ -240,6 +266,6 @@ class AnnotationDB:
             return False
     
     def close(self):
-        """Close the database connection"""
+        """Close the database connection."""
         if self.conn:
             self.conn.close()
