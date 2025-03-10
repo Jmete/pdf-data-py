@@ -90,4 +90,4 @@ python setup.py build
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](https://opensource.org/license/mit)
