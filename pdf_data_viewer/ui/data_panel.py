@@ -2,13 +2,16 @@
 
 from PySide6.QtWidgets import (QScrollArea, QWidget, QVBoxLayout, QLabel, QTableWidget,
                               QTableWidgetItem, QPushButton, QHeaderView)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 from ..config import DATE_FIELDS
 from ..utils.date_utils import standardize_date
 
 class DataPanel(QScrollArea):
     """Panel for displaying extracted data and annotations."""
+
+    # Signal for index of selected annotation
+    annotationSelected = Signal(int)
     
     def __init__(self, parent=None):
         """
@@ -55,6 +58,10 @@ class DataPanel(QScrollArea):
         self.annotations_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.annotations_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.annotations_list.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.data_layout.addWidget(self.annotations_list)
+
+        # Connect cell clicked signal to our handler
+        self.annotations_list.cellClicked.connect(self.onAnnotationCellClicked)
         self.data_layout.addWidget(self.annotations_list)
         
         # Export button
@@ -177,3 +184,18 @@ class DataPanel(QScrollArea):
         
         # Resize columns
         self.annotations_list.resizeColumnsToContents()
+
+    def onAnnotationCellClicked(self, row, column):
+        """
+        Handle clicks on the annotation list.
+        
+        Args:
+            row (int): Row index
+            column (int): Column index
+        """
+        # Ignore clicks on the delete button column (column 5)
+        if column == 5:
+            return
+        
+        # Emit signal with annotation index
+        self.annotationSelected.emit(row)

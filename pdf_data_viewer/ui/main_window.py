@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         
         # Data panel signals
         self.data_panel.export_button.clicked.connect(self.exportAnnotationsToCSV)
+        self.data_panel.annotationSelected.connect(self.onAnnotationSelected)
     
     def createMenuBar(self):
         """Create the application menu bar."""
@@ -308,6 +309,23 @@ class MainWindow(QMainWindow):
             text (str): Selected text
         """
         self.data_panel.updateSelectedText(text)
+
+    def onAnnotationSelected(self, index):
+        """
+        Handle selection of an annotation in the data panel.
+        
+        Args:
+            index (int): Index of the selected annotation
+        """
+        if 0 <= index < len(self.annotation_handler.annotations):
+            annotation = self.annotation_handler.annotations[index]
+            
+            if 'page' in annotation and 'rect' in annotation:
+                # Scroll to the annotation
+                self.pdf_viewer.scrollToAnnotation(annotation['page'], annotation['rect'])
+                
+                # Update status
+                self.statusBar().showMessage(f"Navigated to annotation on page {annotation['page'] + 1}")
     
     def onAnnotationAdded(self, annotation):
         """

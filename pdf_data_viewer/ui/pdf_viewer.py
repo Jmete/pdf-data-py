@@ -451,3 +451,29 @@ class PDFViewer(QGraphicsView):
         else:
             super().mouseReleaseEvent(event)
             self.setDragMode(QGraphicsView.NoDrag)
+
+    def scrollToAnnotation(self, page_num, rect):
+        """
+        Scroll to make a specific annotation visible.
+        
+        Args:
+            page_num (int): Page number of the annotation
+            rect (fitz.Rect): Rectangle coordinates of the annotation
+        """
+        if not self.pdf_doc.doc or page_num < 0 or page_num >= self.pdf_doc.page_count:
+            return
+        
+        # First, make sure the page is in view by going to that page
+        self.goToPage(page_num)
+        
+        # Then, calculate the scene coordinates for the annotation
+        if page_num < len(self.pages):
+            page = self.pages[page_num]
+            
+            # Convert PDF coordinates to scene coordinates
+            pdf_to_scene = self.pdf_doc.dpi / 72.0
+            scene_x = page['rect'].x() + (rect.x0 * pdf_to_scene)
+            scene_y = page['rect'].y() + (rect.y0 * pdf_to_scene)
+            
+            # Center on the annotation
+            self.centerOn(scene_x, scene_y)
