@@ -3,6 +3,8 @@
 from PySide6.QtWidgets import (QScrollArea, QWidget, QVBoxLayout, QLabel, QTableWidget,
                               QTableWidgetItem, QPushButton, QHeaderView)
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
+
 
 from ..config import DATE_FIELDS
 from ..utils.date_utils import standardize_date
@@ -130,6 +132,10 @@ class DataPanel(QScrollArea):
         # Clear the list
         self.annotations_list.setRowCount(0)
         
+        # Debug multi-page annotations
+        multipage_count = sum(1 for a in annotations if a.get('is_multipage', False))
+        print(f"Displaying {len(annotations)} annotations, of which {multipage_count} are multi-page")
+        
         # Add each annotation
         for i, annot in enumerate(annotations):
             if 'page' not in annot or 'text' not in annot:
@@ -143,7 +149,14 @@ class DataPanel(QScrollArea):
             self.annotations_list.setItem(row_position, 0, page_item)
             
             # Annotation type
-            type_item = QTableWidgetItem(annot.get('type', ''))
+            type_text = annot.get('type', '')
+            if annot.get('is_multipage', False):
+                position = annot.get('multipage_position', '')
+                multipage_type = annot.get('multipage_type', '')
+                if position is not None and multipage_type:
+                    type_text += f" ({position}/{multipage_type})"
+                    print(f"Adding type text with multi-page info: {type_text}")
+            type_item = QTableWidgetItem(type_text)
             self.annotations_list.setItem(row_position, 1, type_item)
             
             # Line item number
@@ -171,6 +184,12 @@ class DataPanel(QScrollArea):
                 display_text = display_text[:47] + "..."
                 
             text_item = QTableWidgetItem(display_text)
+            
+            # Make multi-page annotations visually distinct
+            if annot.get('is_multipage', False):
+                print(f"Setting blue background for multi-page annotation (row {row_position})")
+                text_item.setBackground(QColor(240, 240, 255))  # Light blue background
+                
             self.annotations_list.setItem(row_position, 4, text_item)
             
             # Delete button

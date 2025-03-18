@@ -50,6 +50,10 @@ class AnnotationDB:
                 field_name TEXT NOT NULL,
                 line_item_number TEXT,
                 standardized_date TEXT,
+                is_multipage BOOLEAN DEFAULT 0,
+                multipage_position INTEGER,  -- Changed to INTEGER for ordering (1,2,3...)
+                multipage_type TEXT,         -- New field for start/middle/end
+                group_id TEXT,               -- Keeping group_id as it's required for functionality
                 date_created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             ''')
@@ -82,29 +86,40 @@ class AnnotationDB:
             field_name = annotation.get('field', '')
             standardized_date = None
             
-            if field_name in date_fields and annotation['text']:
+            if field_name in date_fields and annotation.get('text'):
                 # Use standardized_date if it's already in the annotation
                 if 'standardized_date' in annotation and annotation['standardized_date']:
                     standardized_date = annotation['standardized_date']
                 else:
                     # Try to convert the date
-                    standardized_date = standardize_date(annotation['text'])
+                    standardized_date = standardize_date(annotation.get('text', ''))
+            
+            # Check for multi-page annotation data
+            is_multipage = 1 if annotation.get('is_multipage', False) else 0
+            multipage_position = annotation.get('multipage_position', None)
+            multipage_type = annotation.get('multipage_type', '')
+            group_id = annotation.get('group_id', '')
             
             # Insert into annotations table
             self.cursor.execute('''
             INSERT INTO annotations (
                 file_name, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
-                annotation_text, annotation_type, field_name, line_item_number, standardized_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                annotation_text, annotation_type, field_name, line_item_number, standardized_date,
+                is_multipage, multipage_position, multipage_type, group_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 file_name,
                 annotation['page'],
                 rect_x0, rect_y0, rect_x1, rect_y1,
-                annotation['text'],
+                annotation.get('text', ''),
                 annotation.get('type', ''),
                 field_name,
                 annotation.get('line_item_number', ''),
-                standardized_date
+                standardized_date,
+                is_multipage,
+                multipage_position,
+                multipage_type,
+                group_id
             ))
             
             annotation_id = self.cursor.lastrowid
@@ -131,11 +146,11 @@ class AnnotationDB:
             
             self.cursor.execute('''
             SELECT id, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
-                   annotation_text, annotation_type, field_name, line_item_number,
-                   standardized_date, file_name
+                annotation_text, annotation_type, field_name, line_item_number,
+                standardized_date, file_name, is_multipage, multipage_position, multipage_type, group_id
             FROM annotations
             WHERE file_name = ?
-            ORDER BY id
+            ORDER BY group_id, multipage_position, id
             ''', (file_name,))
             
             annotations = []
@@ -156,9 +171,20 @@ class AnnotationDB:
                 if row[10] is not None:
                     annotation['standardized_date'] = row[10]
                 
+                # Add multi-page annotation data
+                if row[12] == 1:  # is_multipage
+                    annotation['is_multipage'] = True
+                    annotation['multipage_position'] = row[13]  # multipage_position
+                    annotation['multipage_type'] = row[14]      # multipage_type
+                    annotation['group_id'] = row[15]            # group_id
+                
                 annotations.append(annotation)
             
             return annotations
+            
+        except sqlite3.Error as e:
+            print(f"Error retrieving annotations: {str(e)}")
+            return []
             
         except sqlite3.Error as e:
             print(f"Error retrieving annotations: {str(e)}")
@@ -216,11 +242,11 @@ class AnnotationDB:
             
             self.cursor.execute('''
             SELECT id, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
-                   annotation_text, annotation_type, field_name, line_item_number,
-                   standardized_date, file_name
+                annotation_text, annotation_type, field_name, line_item_number,
+                standardized_date, file_name, is_multipage, multipage_position, multipage_type, group_id
             FROM annotations
             WHERE file_name = ?
-            ORDER BY id
+            ORDER BY field_name, line_item_number, group_id, multipage_position, id
             ''', (file_name,))
             
             rows = self.cursor.fetchall()
@@ -236,12 +262,18 @@ class AnnotationDB:
                 fieldnames = [
                     'id', 'file_name', 'page', 'type', 'field', 'line_item_number', 
                     'rect_x0', 'rect_y0', 'rect_x1', 'rect_y1',
-                    'text', 'standardized_date'
+                    'text', 'standardized_date', 
+                    'is_multipage', 'multipage_position', 'multipage_type', 'multipage_group'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 
                 for row in rows:
+                    is_multipage = row[12] == 1
+                    multipage_position = row[13]
+                    multipage_type = row[14]
+                    group_id = row[15]
+                    
                     row_dict = {
                         'id': row[0],
                         'file_name': row[11],
@@ -254,13 +286,17 @@ class AnnotationDB:
                         'rect_x1': row[4],
                         'rect_y1': row[5],
                         'text': row[6],
-                        'standardized_date': row[10] if row[10] else ''
+                        'standardized_date': row[10] if row[10] else '',
+                        'is_multipage': 1 if is_multipage else 0,
+                        'multipage_position': multipage_position if multipage_position is not None else '',
+                        'multipage_type': multipage_type if multipage_type else '',
+                        'multipage_group': group_id if group_id else ''
                     }
                     writer.writerow(row_dict)
-            
-            print(f"Successfully exported {len(rows)} annotations to {output_path}")
-            return True
-            
+                
+                print(f"Successfully exported {len(rows)} annotations to {output_path}")
+                return True
+                
         except Exception as e:
             print(f"Error exporting to CSV: {str(e)}")
             return False

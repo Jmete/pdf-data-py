@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QPointF, QRectF, QSizeF, Signal
 from PySide6.QtGui import QPen, QBrush, QColor, QPainter, QTransform
 
 import fitz  # PyMuPDF
+import time
 from ..core.pdf_handler import PDFDocument
 from ..config import DEFAULT_ZOOM_FACTOR, MIN_ZOOM, MAX_ZOOM, PAGE_GAP
 
@@ -280,21 +281,23 @@ class PDFViewer(QGraphicsView):
         end_page_idx, _ = self.findPageAt(rect.bottomRight())
         
         if start_page_idx < 0 or end_page_idx < 0:
+            print("Selection doesn't cover any pages")
             return ""
             
         # Convert to PDF coordinates
         start_page_idx, start_pdf_pos = self.mapPDFPositionToPage(rect.topLeft())
         end_page_idx, end_pdf_pos = self.mapPDFPositionToPage(rect.bottomRight())
         
+        print(f"Selection spans pages {start_page_idx} to {end_page_idx}")
+        
         text = ""
         
         # Handle selection across pages
         if start_page_idx == end_page_idx:
             # Single page selection
-            text = self.pdf_doc.get_text_in_rect(
-                start_page_idx, 
-                fitz.Rect(start_pdf_pos[0], start_pdf_pos[1], end_pdf_pos[0], end_pdf_pos[1])
-            )
+            pdf_rect = fitz.Rect(start_pdf_pos[0], start_pdf_pos[1], end_pdf_pos[0], end_pdf_pos[1])
+            text = self.pdf_doc.get_text_in_rect(start_page_idx, pdf_rect)
+            print(f"Single page text: '{text}'")
         else:
             # Multi-page selection
             for page_idx in range(start_page_idx, end_page_idx + 1):
@@ -311,8 +314,9 @@ class PDFViewer(QGraphicsView):
                     clip_rect = page.rect
                     
                 page_text = self.pdf_doc.get_text_in_rect(page_idx, clip_rect)
+                print(f"Page {page_idx} text: '{page_text}'")
                 text += page_text + "\n"
-                
+        
         return text
     
     # Navigation methods
@@ -429,28 +433,34 @@ class PDFViewer(QGraphicsView):
                 end_page_idx, end_pdf_pos = self.mapPDFPositionToPage(rect.bottomRight())
                 
                 if start_page_idx >= 0 and end_page_idx >= 0:
-                    # Create annotation
-                    pdf_rect = fitz.Rect(start_pdf_pos[0], start_pdf_pos[1], end_pdf_pos[0], end_pdf_pos[1])
-                    
-                    # Emit signal with annotation info
-                    annotation_info = {
-                        'page': start_page_idx,
-                        'rect': pdf_rect,
-                        'text': selected_text,
-                        'type': 'selection'
-                    }
-                    self.annotationAdded.emit(annotation_info)
-            
-            # Clean up
-            self.is_selecting = False
-            if self.selection_rect:
-                self.scene.removeItem(self.selection_rect)
-                self.selection_rect = None
+                    # Check if this is a multi-page selection
+                    if start_page_idx == end_page_idx:
+                        # Single page selection - handle as before
+                        pdf_rect = fitz.Rect(start_pdf_pos[0], start_pdf_pos[1], end_pdf_pos[0], end_pdf_pos[1])
+                        
+                        # Emit signal with annotation info
+                        annotation_info = {
+                            'page': start_page_idx,
+                            'rect': pdf_rect,
+                            'text': selected_text,
+                            'type': 'selection',
+                            'is_multipage': False
+                        }
+                        self.annotationAdded.emit(annotation_info)
+                    else:
+                        # Multi-page selection - create a separate annotation for each page
+                        self.handleMultiPageSelection(start_page_idx, start_pdf_pos, end_page_idx, end_pdf_pos, selected_text)
                 
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
-            self.setDragMode(QGraphicsView.NoDrag)
+                # Clean up
+                self.is_selecting = False
+                if self.selection_rect:
+                    self.scene.removeItem(self.selection_rect)
+                    self.selection_rect = None
+                    
+                event.accept()
+            else:
+                super().mouseReleaseEvent(event)
+                self.setDragMode(QGraphicsView.NoDrag)
 
     def scrollToAnnotation(self, page_num, rect):
         """
@@ -477,3 +487,71 @@ class PDFViewer(QGraphicsView):
             
             # Center on the annotation
             self.centerOn(scene_x, scene_y)
+
+    def handleMultiPageSelection(self, start_page_idx, start_pdf_pos, end_page_idx, end_pdf_pos, complete_text):
+        """Handle selections that span multiple pages by creating separate annotations for each page.
+        
+        Args:
+            start_page_idx (int): Index of the first page in the selection
+            start_pdf_pos (tuple): PDF coordinates on the first page
+            end_page_idx (int): Index of the last page in the selection
+            end_pdf_pos (tuple): PDF coordinates on the last page
+            complete_text (str): Complete text from the selection across all pages
+        """
+        # Get group ID to associate annotations across pages
+        group_id = str(int(time.time() * 1000))  # Simple timestamp-based ID
+        
+        # Calculate total number of pages in this multi-page selection
+        total_pages = end_page_idx - start_page_idx + 1
+        
+        # Handle first page
+        first_page = self.pdf_doc.doc[start_page_idx]
+        first_page_rect = fitz.Rect(start_pdf_pos[0], start_pdf_pos[1], first_page.rect.width, first_page.rect.height)
+        first_page_text = self.pdf_doc.get_text_in_rect(start_page_idx, first_page_rect)
+        
+        # Emit signal for first page annotation
+        self.annotationAdded.emit({
+            'page': start_page_idx,
+            'rect': first_page_rect,
+            'text': first_page_text,
+            'type': 'selection',
+            'is_multipage': True,
+            'multipage_position': 1,  # Now using 1-based position numbering
+            'multipage_type': 'start',  # Type remains as start/middle/end
+            'group_id': group_id,
+            'complete_text': complete_text  # Store the complete text with the first annotation
+        })
+        
+        # Handle middle pages (if any)
+        position = 2  # Start with position 2
+        for page_idx in range(start_page_idx + 1, end_page_idx):
+            page = self.pdf_doc.doc[page_idx]
+            page_rect = page.rect
+            page_text = self.pdf_doc.get_text_in_rect(page_idx, page_rect)
+            
+            self.annotationAdded.emit({
+                'page': page_idx,
+                'rect': page_rect,
+                'text': page_text,
+                'type': 'selection',
+                'is_multipage': True,
+                'multipage_position': position,
+                'multipage_type': 'middle',
+                'group_id': group_id
+            })
+            position += 1
+        
+        # Handle last page
+        last_page_rect = fitz.Rect(0, 0, end_pdf_pos[0], end_pdf_pos[1])
+        last_page_text = self.pdf_doc.get_text_in_rect(end_page_idx, last_page_rect)
+        
+        self.annotationAdded.emit({
+            'page': end_page_idx,
+            'rect': last_page_rect,
+            'text': last_page_text,
+            'type': 'selection',
+            'is_multipage': True,
+            'multipage_position': total_pages,
+            'multipage_type': 'end',
+            'group_id': group_id
+        })

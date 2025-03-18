@@ -262,6 +262,8 @@ class MainWindow(QMainWindow):
         
         if db_annotations:
             print(f"Found {len(db_annotations)} annotations in database")
+            multipage_count = sum(1 for a in db_annotations if a.get('is_multipage', False))
+            print(f"Of which {multipage_count} are part of multi-page annotations")
             
             for db_annot in db_annotations:
                 # Convert rect tuple to fitz.Rect
@@ -287,6 +289,14 @@ class MainWindow(QMainWindow):
                 # Add standardized date if present
                 if 'standardized_date' in db_annot:
                     annot['standardized_date'] = db_annot['standardized_date']
+                
+                # Add multi-page annotation data if present
+                if 'is_multipage' in db_annot and db_annot['is_multipage']:
+                    annot['is_multipage'] = True
+                    annot['multipage_position'] = db_annot.get('multipage_position')
+                    annot['multipage_type'] = db_annot.get('multipage_type', '')
+                    annot['group_id'] = db_annot.get('group_id', '')
+                    print(f"Loaded multi-page annotation: position={annot['multipage_position']}, type={annot['multipage_type']}")
                 
                 # Add to annotation handler's list
                 self.annotation_handler.annotations.append(annot)
@@ -334,41 +344,53 @@ class MainWindow(QMainWindow):
         Args:
             annotation (dict): Annotation data
         """
-        # Show field selection dialog
-        dialog = AnnotationFieldDialog(self, self.annotation_handler.last_line_item_number)
-        if dialog.exec() == QDialog.Accepted:
-            # Get field info
-            field_info = dialog.getFieldInfo()
-            
-            # Check if this is a date field
-            date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
-            if field_info.get('field') in date_fields:
-                # Try to create a standardized date
-                from ..utils.date_utils import standardize_date
+        # Show field selection dialog only for the first part of multi-page annotations
+        # or for single-page annotations
+        show_dialog = not annotation.get('is_multipage', False) or annotation.get('multipage_type') == 'start'
+        field_info = None
+        
+        if show_dialog:
+            dialog = AnnotationFieldDialog(self, self.annotation_handler.last_line_item_number)
+            if dialog.exec() == QDialog.Accepted:
+                # Get field info
+                field_info = dialog.getFieldInfo()
                 
-                # Clean the text for date fields
-                cleaned_text = annotation['text'].replace('[', '').replace(']', '').strip()
+                # Store for multi-page annotations if needed
+                if annotation.get('is_multipage', False):
+                    self.last_field_info = field_info
+                    self.last_annotation_group_id = annotation.get('group_id')
+                    
+                    # Process date fields with the complete text
+                    if 'complete_text' in annotation:
+                        text_to_use = annotation['complete_text']
+                    else:
+                        text_to_use = annotation['text']
+                    self._process_date_field(field_info, text_to_use)
+            else:
+                # Dialog cancelled, remove any partial annotations
+                self._cleanup_annotation(annotation)
+                return
+        else:
+            # For continuing multi-page annotations, use the stored field info
+            if hasattr(self, 'last_field_info') and hasattr(self, 'last_annotation_group_id'):
+                if annotation.get('group_id') == self.last_annotation_group_id:
+                    field_info = self.last_field_info
                 
-                # Pre-standardize the date and add it to the field info to avoid duplicate standardization
-                std_date = standardize_date(cleaned_text, log_level='error')
-                if std_date:
-                    field_info['standardized_date'] = std_date
-                else:
-                    # Alert user if date standardization failed
-                    QMessageBox.warning(
-                        self,
-                        "Date Standardization Failed",
-                        f"Could not convert '{cleaned_text}' to a standardized date format.\n\n"
-                        f"The annotation will be saved, but the date won't be standardized.\n"
-                        f"You may want to redo this annotation with clearer date text."
-                    )
+        # Add the annotation
+        if field_info or not show_dialog:
+            # Use the actual text from each page
+            text_to_use = annotation['text']
             
-            # Add the annotation with field info
+            # Create the annotation
             complete_annotation = self.annotation_handler.add_annotation(
-                annotation['page'], 
-                annotation['rect'], 
-                annotation['text'],
-                field_info
+                annotation['page'],
+                annotation['rect'],
+                text_to_use,
+                field_info,
+                is_multipage=annotation.get('is_multipage', False),
+                multipage_position=annotation.get('multipage_position'),
+                multipage_type=annotation.get('multipage_type', ''),
+                group_id=annotation.get('group_id', '')
             )
             
             # Add to database
@@ -385,11 +407,48 @@ class MainWindow(QMainWindow):
             # Update UI
             self.updateAnnotationsList()
         else:
-            # Dialog cancelled, remove the annotation highlight
-            self.pdf_viewer.pdf_doc.remove_annotation(annotation['page'])
+            # No field info, remove annotation highlight
+            self._cleanup_annotation(annotation)
+
+    def _process_date_field(self, field_info, text):
+        """Process date fields."""
+        date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
+        if field_info.get('field') in date_fields:
+            from ..utils.date_utils import standardize_date
             
-            # Re-render the page
-            self.pdf_viewer.renderPage(annotation['page'])
+            # Clean the text for date fields
+            cleaned_text = text.replace('[', '').replace(']', '').strip()
+            
+            # Pre-standardize the date and add it to the field info
+            std_date = standardize_date(cleaned_text, log_level='error')
+            if std_date:
+                field_info['standardized_date'] = std_date
+            else:
+                # Alert user if date standardization failed
+                QMessageBox.warning(
+                    self,
+                    "Date Standardization Failed",
+                    f"Could not convert '{cleaned_text}' to a standardized date format.\n\n"
+                    f"The annotation will be saved, but the date won't be standardized.\n"
+                    f"You may want to redo this annotation with clearer date text."
+                )
+
+    def _cleanup_annotation(self, annotation):
+        """Remove annotation highlights when needed."""
+        # Dialog cancelled, remove the annotation highlight
+        self.pdf_viewer.pdf_doc.remove_annotation(annotation['page'])
+        
+        # For multi-page selections, we may need to remove annotations from other pages
+        if annotation.get('is_multipage', False) and annotation.get('group_id'):
+            # Find and remove all annotations with this group_id
+            group_id = annotation.get('group_id')
+            for page_idx in range(self.pdf_viewer.pdf_doc.page_count):
+                if page_idx != annotation['page']:
+                    # This is simplistic - we should ideally track which pages were annotated
+                    self.pdf_viewer.pdf_doc.remove_annotation(page_idx)
+        
+        # Re-render the page
+        self.pdf_viewer.renderPage(annotation['page'])
     
     def updateAnnotationsList(self):
         """Update the annotations list in the data panel."""

@@ -22,7 +22,7 @@ class AnnotationHandler:
         """Clear all annotations from memory."""
         self.annotations = []
     
-    def add_annotation(self, page_num, rect, text, field_info=None):
+    def add_annotation(self, page_num, rect, text, field_info=None, is_multipage=False, multipage_position=None, multipage_type='', group_id=''):
         """
         Add an annotation to the PDF.
         
@@ -31,6 +31,10 @@ class AnnotationHandler:
             rect (fitz.Rect): Rectangle coordinates
             text (str): Text content of the annotation
             field_info (dict, optional): Field information for the annotation
+            is_multipage (bool): Whether this is part of a multi-page annotation
+            multipage_position (int): Position number in multi-page annotation (1,2,3...)
+            multipage_type (str): Type in multi-page annotation ('start', 'middle', 'end')
+            group_id (str): Group ID for associating multi-page annotations
             
         Returns:
             dict: The created annotation data
@@ -47,12 +51,19 @@ class AnnotationHandler:
             'annot_id': len(self.annotations)  # Use a unique ID
         }
         
+        # Add multi-page annotation data if applicable
+        if is_multipage:
+            annotation['is_multipage'] = True
+            annotation['multipage_position'] = multipage_position
+            annotation['multipage_type'] = multipage_type
+            annotation['group_id'] = group_id
+        
         # Add field info if provided
         if field_info:
             annotation.update(field_info)
             
             # Process date fields (only if standardized_date is not already provided)
-            if field_info.get('field') in DATE_FIELDS and 'standardized_date' not in annotation:
+            if field_info.get('field') in DATE_FIELDS and 'standardized_date' not in annotation and text:
                 cleaned_text = self.clean_text_for_date_field(text, field_info.get('field'))
                 if cleaned_text != text:
                     annotation['text'] = cleaned_text
