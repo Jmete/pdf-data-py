@@ -1,16 +1,135 @@
-"""Data panel for displaying extracted data and annotations."""
+"""Data panel for displaying extracted data and annotations with collapsible groups."""
 
 from PySide6.QtWidgets import (QScrollArea, QWidget, QVBoxLayout, QLabel, QTableWidget,
-                              QTableWidgetItem, QPushButton, QHeaderView)
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+                              QTableWidgetItem, QPushButton, QHeaderView, QFrame,
+                              QHBoxLayout, QToolButton, QSizePolicy)
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QColor, QIcon, QFont
 
 
 from ..config import DATE_FIELDS
 from ..utils.date_utils import standardize_date
 
+class CollapsibleSection(QWidget):
+    """A collapsible section widget that can be expanded or collapsed."""
+    
+    def __init__(self, title, parent=None):
+        """
+        Initialize the collapsible section.
+        
+        Args:
+            title (str): Title for the section header
+            parent (QWidget, optional): Parent widget
+        """
+        super().__init__(parent)
+        
+        # Main layout
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        # Header frame
+        self.header_frame = QFrame()
+        self.header_frame.setFrameShape(QFrame.StyledPanel)
+        self.header_frame.setFrameShadow(QFrame.Raised)
+        self.header_frame.setStyleSheet("background-color: #f0f0f0;")
+        self.header_frame.setCursor(Qt.PointingHandCursor)
+        
+        # Header layout - make it more compact
+        self.header_layout = QHBoxLayout(self.header_frame)
+        self.header_layout.setContentsMargins(5, 2, 5, 2)
+        
+        # Toggle button for expand/collapse
+        self.toggle_button = QToolButton()
+        self.toggle_button.setStyleSheet("QToolButton { border: none; }")
+        self.toggle_button.setIconSize(QSize(16, 16))
+        # Set arrows for expand/collapse (using text as fallback)
+        self.toggle_button.setText("►")
+        self.toggle_button.setFont(QFont('Arial', 9))
+        self.toggle_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.toggle_button.clicked.connect(self.toggle_content)
+        
+        # Title label
+        self.title_label = QLabel(title)
+        self.title_label.setFont(QFont('Arial', 10, QFont.Bold))
+        
+        # Badge label for item count
+        self.badge_label = QLabel("0")
+        self.badge_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.badge_label.setStyleSheet("""
+            padding: 2px 8px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+        """)
+        
+        # Add widgets to header layout
+        self.header_layout.addWidget(self.toggle_button)
+        self.header_layout.addWidget(self.title_label)
+        self.header_layout.addStretch()
+        self.header_layout.addWidget(self.badge_label)
+        
+        # Content widget
+        self.content = QWidget()
+        self.content.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)  # Fixed height
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(5, 2, 2, 2)  # Reduced margins
+        self.content_layout.setSpacing(0)  # No spacing
+        self.content.setVisible(False)  # Initially collapsed
+        
+        # Add widgets to main layout
+        self.main_layout.addWidget(self.header_frame)
+        self.main_layout.addWidget(self.content)
+        
+        # Connect header click to toggle
+        self.header_frame.mousePressEvent = self.header_clicked
+        
+        # Styling
+        self.setStyleSheet("""
+            CollapsibleSection {
+                border: 1px solid #c0c0c0;
+                border-radius: 3px;
+                margin-bottom: 3px;
+            }
+        """)
+        
+        # Size policy to make the widget wrap its content tightly
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+    
+    def header_clicked(self, event):
+        """Handle click on the header area."""
+        self.toggle_content()
+    
+    def toggle_content(self):
+        """Toggle the visibility of the content area."""
+        self.content.setVisible(not self.content.isVisible())
+        
+        # Update toggle button text/icon
+        if self.content.isVisible():
+            self.toggle_button.setText("▼")
+        else:
+            self.toggle_button.setText("►")
+    
+    def set_badge_count(self, count):
+        """Update the badge counter."""
+        self.badge_label.setText(str(count))
+    
+    def add_widget(self, widget):
+        """Add a widget to the content area."""
+        self.content_layout.addWidget(widget)
+    
+    def expand(self):
+        """Expand the section to show content."""
+        self.content.setVisible(True)
+        self.toggle_button.setText("▼")
+    
+    def collapse(self):
+        """Collapse the section to hide content."""
+        self.content.setVisible(False)
+        self.toggle_button.setText("►")
+
+
 class DataPanel(QScrollArea):
-    """Panel for displaying extracted data and annotations."""
+    """Panel for displaying extracted data and annotations using collapsible groups."""
 
     # Signal for index of selected annotation
     annotationSelected = Signal(int)
@@ -28,6 +147,7 @@ class DataPanel(QScrollArea):
         # Data content widget
         self.data_content = QWidget()
         self.data_layout = QVBoxLayout(self.data_content)
+        self.data_layout.setSpacing(5)  # Reduced spacing
         
         # Info label
         self.data_label = QLabel("Data extracted from PDF will appear here")
@@ -41,37 +161,71 @@ class DataPanel(QScrollArea):
         self.selected_text_display.setWordWrap(True)
         self.selected_text_display.setFrameShape(QLabel.Panel)
         self.selected_text_display.setFrameShadow(QLabel.Sunken)
-        self.selected_text_display.setMinimumHeight(100)
+        self.selected_text_display.setMinimumHeight(80)  # Slightly smaller
         self.data_layout.addWidget(self.selected_text_display)
         
-        # Annotations section
+        # Annotations sections
         self.annotations_label = QLabel("Annotations:")
         self.data_layout.addWidget(self.annotations_label)
         
-        # Annotations table
-        self.annotations_list = QTableWidget()
-        self.annotations_list.setColumnCount(6)
-        self.annotations_list.setHorizontalHeaderLabels(
-            ["Page", "Type", "Item #", "Field", "Text", "Delete"]
-        )
-        self.annotations_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.annotations_list.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.data_layout.addWidget(self.annotations_list)
-
-        # Connect cell clicked signal to our handler
-        self.annotations_list.cellClicked.connect(self.onAnnotationCellClicked)
-        self.data_layout.addWidget(self.annotations_list)
+        # We'll create the metadata section only when needed
+        self.meta_section = None
+        self.meta_table = None
+        
+        # Line items container - we'll add line item sections dynamically
+        self.line_items_container = QWidget()
+        self.line_items_layout = QVBoxLayout(self.line_items_container)
+        self.line_items_layout.setContentsMargins(0, 0, 0, 0)
+        self.line_items_layout.setSpacing(2)  # Compact spacing
+        self.data_layout.addWidget(self.line_items_container)
+        
+        # Map to store line item sections by line item number
+        self.line_item_sections = {}
         
         # Export button
         self.export_button = QPushButton("Export Annotations to CSV")
         self.data_layout.addWidget(self.export_button)
         
+        # Add stretch at the end
+        self.data_layout.addStretch()
+        
         # Set as the panel's widget
         self.setWidget(self.data_content)
+        
+        # Store mapping between annotation index and its location (section, table, row)
+        self.annotation_index_map = {}
+        
+    def create_table(self, headers):
+        """Create a table with the given headers."""
+        table = QTableWidget()
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        
+        # Set last column as fixed width for delete button
+        if "Delete" in headers:
+            delete_col = headers.index("Delete")
+            table.horizontalHeader().setSectionResizeMode(delete_col, QHeaderView.ResizeToContents)
+        
+        # Set stretch for the text column
+        text_col = headers.index("Text") if "Text" in headers else 1
+        table.horizontalHeader().setSectionResizeMode(text_col, QHeaderView.Stretch)
+        
+        # Set other columns to resize to contents
+        for i in range(len(headers)):
+            if i != text_col and (i != delete_col if "Delete" in headers else True):
+                table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        
+        # Connect cell clicked signal
+        table.cellClicked.connect(self.onTableCellClicked)
+        
+        # Adjust row height to be more compact
+        table.verticalHeader().setVisible(False)  # Hide row numbers
+        table.verticalHeader().setDefaultSectionSize(22)  # Compact row height
+        
+        # Make table size to content
+        table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        
+        return table
     
     def updatePDFInfo(self, doc):
         """
@@ -108,8 +262,21 @@ class DataPanel(QScrollArea):
         self.selected_text_display.setText("No text selected")
     
     def clearAnnotations(self):
-        """Clear the annotations list."""
-        self.annotations_list.setRowCount(0)
+        """Clear all annotations from tables and remove line item sections."""
+        # Clear metadata section if it exists
+        if self.meta_section:
+            self.data_layout.removeWidget(self.meta_section)
+            self.meta_section.deleteLater()
+            self.meta_section = None
+            self.meta_table = None
+        
+        # Clear line items
+        for section in self.line_item_sections.values():
+            self.line_items_layout.removeWidget(section)
+            section.deleteLater()
+        
+        self.line_item_sections = {}
+        self.annotation_index_map = {}
     
     def updateSelectedText(self, text):
         """
@@ -123,49 +290,70 @@ class DataPanel(QScrollArea):
     
     def updateAnnotationsList(self, annotations, on_delete_callback=None):
         """
-        Update the annotations list.
+        Update the annotations list with collapsible grouping.
         
         Args:
             annotations (list): List of annotation dictionaries
             on_delete_callback (function, optional): Callback for delete button clicks
         """
-        # Clear the list
-        self.annotations_list.setRowCount(0)
+        # Clear existing annotations
+        self.clearAnnotations()
         
-        # Debug multi-page annotations
-        multipage_count = sum(1 for a in annotations if a.get('is_multipage', False))
-        print(f"Displaying {len(annotations)} annotations, of which {multipage_count} are multi-page")
+        if not annotations:
+            return
+            
+        # Group annotations by type and line item number
+        meta_annotations = []
+        line_item_annotations = {}
         
-        # Add each annotation
         for i, annot in enumerate(annotations):
-            if 'page' not in annot or 'text' not in annot:
+            if 'type' not in annot or 'text' not in annot:
                 continue
                 
-            row_position = self.annotations_list.rowCount()
-            self.annotations_list.insertRow(row_position)
+            if annot.get('type') == 'meta':
+                meta_annotations.append((i, annot))
+            elif annot.get('type') == 'line_item':
+                line_num = annot.get('line_item_number', '')
+                if line_num not in line_item_annotations:
+                    line_item_annotations[line_num] = []
+                line_item_annotations[line_num].append((i, annot))
+        
+        # Fill metadata section
+        self._populate_meta_section(meta_annotations, on_delete_callback)
+        
+        # Fill line item sections
+        self._populate_line_item_sections(line_item_annotations, on_delete_callback)
+    
+    def _populate_meta_section(self, meta_annotations, on_delete_callback):
+        """Populate the metadata section with annotation data."""
+        if not meta_annotations:
+            # If there are no metadata annotations, remove the section if it exists
+            if self.meta_section:
+                self.data_layout.removeWidget(self.meta_section)
+                self.meta_section.deleteLater()
+                self.meta_section = None
+                self.meta_table = None
+            return
             
-            # Page number (1-based)
-            page_item = QTableWidgetItem(str(annot['page'] + 1))
-            self.annotations_list.setItem(row_position, 0, page_item)
-            
-            # Annotation type
-            type_text = annot.get('type', '')
-            if annot.get('is_multipage', False):
-                position = annot.get('multipage_position', '')
-                multipage_type = annot.get('multipage_type', '')
-                if position is not None and multipage_type:
-                    type_text += f" ({position}/{multipage_type})"
-                    print(f"Adding type text with multi-page info: {type_text}")
-            type_item = QTableWidgetItem(type_text)
-            self.annotations_list.setItem(row_position, 1, type_item)
-            
-            # Line item number
-            line_item_num = QTableWidgetItem(annot.get('line_item_number', ''))
-            self.annotations_list.setItem(row_position, 2, line_item_num)
+        # Create the metadata section if it doesn't exist
+        if not self.meta_section:
+            self.meta_section = CollapsibleSection("Metadata")
+            self.meta_table = self.create_table(["Field", "Text", "Delete"])
+            self.meta_section.add_widget(self.meta_table)
+            # Insert at position right after annotations label
+            index = self.data_layout.indexOf(self.annotations_label) + 1
+            self.data_layout.insertWidget(index, self.meta_section)
+        else:
+            # Clear existing rows
+            self.meta_table.setRowCount(0)
+        
+        for i, (index, annot) in enumerate(meta_annotations):
+            row_position = self.meta_table.rowCount()
+            self.meta_table.insertRow(row_position)
             
             # Field name
             field_item = QTableWidgetItem(annot.get('field', ''))
-            self.annotations_list.setItem(row_position, 3, field_item)
+            self.meta_table.setItem(row_position, 0, field_item)
             
             # Text content (with date formatting if applicable)
             display_text = annot['text']
@@ -187,34 +375,171 @@ class DataPanel(QScrollArea):
             
             # Make multi-page annotations visually distinct
             if annot.get('is_multipage', False):
-                print(f"Setting blue background for multi-page annotation (row {row_position})")
                 text_item.setBackground(QColor(240, 240, 255))  # Light blue background
                 
-            self.annotations_list.setItem(row_position, 4, text_item)
+            self.meta_table.setItem(row_position, 1, text_item)
             
             # Delete button
             if on_delete_callback:
                 delete_button = QPushButton("[x]")
                 delete_button.setFixedWidth(30)
-                # Use a lambda to capture the current index
-                delete_func = lambda checked, idx=i: on_delete_callback(idx)
+                delete_button.setFixedHeight(20)  # Make button smaller
+                # Use a lambda to capture the current annotation index
+                delete_func = lambda checked, idx=index: on_delete_callback(idx)
                 delete_button.clicked.connect(delete_func)
-                self.annotations_list.setCellWidget(row_position, 5, delete_button)
+                self.meta_table.setCellWidget(row_position, 2, delete_button)
+            
+            # Map row to annotation index
+            self.annotation_index_map[f"meta_{row_position}"] = index
         
-        # Resize columns
-        self.annotations_list.resizeColumnsToContents()
-
-    def onAnnotationCellClicked(self, row, column):
+        # Update badge count
+        self.meta_section.set_badge_count(len(meta_annotations))
+        
+        # Expand section if it has items
+        if len(meta_annotations) > 0:
+            self.meta_section.expand()
+            
+        # Calculate exact height needed for the table
+        header_height = self.meta_table.horizontalHeader().height()
+        row_count = self.meta_table.rowCount()
+        row_height = self.meta_table.rowHeight(0)
+        table_border = 2  # Border pixels
+        total_table_height = header_height + (row_height * row_count) + table_border
+        
+        # Set the table height precisely
+        self.meta_table.setFixedHeight(total_table_height)
+        
+        # Force layout update to apply the size constraints
+        self.meta_table.updateGeometry()
+        self.meta_section.content.updateGeometry()
+        self.meta_section.updateGeometry()
+    
+    def _populate_line_item_sections(self, line_item_annotations, on_delete_callback):
+        """Populate the line item sections with annotation data."""
+        # Sort line item numbers numerically if possible
+        sorted_line_items = sorted(line_item_annotations.keys(), 
+                                 key=lambda x: int(x) if x.isdigit() else float('inf'))
+        
+        for line_num in sorted_line_items:
+            # Create a section for this line item
+            section_title = f"Line Item #{line_num}" if line_num else "Line Item (No Number)"
+            section = CollapsibleSection(section_title)
+            
+            # Create a table for this line item's annotations
+            table = self.create_table(["Field", "Text", "Delete"])
+            section.add_widget(table)
+            
+            # Add the section to our layout
+            self.line_items_layout.addWidget(section)
+            self.line_item_sections[line_num] = section
+            
+            # Populate the table
+            annotations = line_item_annotations[line_num]
+            for i, (index, annot) in enumerate(annotations):
+                row_position = table.rowCount()
+                table.insertRow(row_position)
+                
+                # Field name
+                field_item = QTableWidgetItem(annot.get('field', ''))
+                table.setItem(row_position, 0, field_item)
+                
+                # Text content (with date formatting if applicable)
+                display_text = annot['text']
+                
+                if annot.get('field') in DATE_FIELDS:
+                    if 'standardized_date' in annot and annot['standardized_date']:
+                        display_text = f"{annot['text']} → {annot['standardized_date']}"
+                    else:
+                        # Try to standardize now
+                        std_date = standardize_date(annot['text'])
+                        if std_date:
+                            display_text = f"{annot['text']} → {std_date}"
+                
+                # Truncate if too long
+                if len(display_text) > 50:
+                    display_text = display_text[:47] + "..."
+                    
+                text_item = QTableWidgetItem(display_text)
+                
+                # Make multi-page annotations visually distinct
+                if annot.get('is_multipage', False):
+                    text_item.setBackground(QColor(240, 240, 255))  # Light blue background
+                    
+                table.setItem(row_position, 1, text_item)
+                
+                # Delete button
+                if on_delete_callback:
+                    delete_button = QPushButton("[x]")
+                    delete_button.setFixedWidth(30)
+                    delete_button.setFixedHeight(20)  # Make button smaller
+                    # Use a lambda to capture the current annotation index
+                    delete_func = lambda checked, idx=index: on_delete_callback(idx)
+                    delete_button.clicked.connect(delete_func)
+                    table.setCellWidget(row_position, 2, delete_button)
+                
+                # Map row to annotation index
+                self.annotation_index_map[f"line_{line_num}_{row_position}"] = index
+            
+            # Update badge count
+            section.set_badge_count(len(annotations))
+            
+            # Expand section
+            section.expand()
+            
+            # Calculate exact height needed for the table
+            header_height = table.horizontalHeader().height()
+            row_count = table.rowCount()
+            row_height = table.rowHeight(0)
+            table_border = 2  # Border pixels
+            total_table_height = header_height + (row_height * row_count) + table_border
+            
+            # Set table height exactly
+            table.setFixedHeight(total_table_height)
+            
+            # Force layout update to apply the size constraints
+            table.updateGeometry()
+            section.content.updateGeometry()
+            section.updateGeometry()
+    
+    def onTableCellClicked(self, row, column):
         """
-        Handle clicks on the annotation list.
+        Handle clicks on any annotation table.
         
         Args:
             row (int): Row index
             column (int): Column index
         """
-        # Ignore clicks on the delete button column (column 5)
-        if column == 5:
+        # Ignore clicks on the delete button column (column 2)
+        if column == 2:
             return
         
-        # Emit signal with annotation index
-        self.annotationSelected.emit(row)
+        # Find which table was clicked
+        sender = self.sender()
+        
+        # Determine the annotation index based on which table was clicked
+        annotation_index = None
+        
+        if self.meta_table and sender == self.meta_table:
+            key = f"meta_{row}"
+            if key in self.annotation_index_map:
+                annotation_index = self.annotation_index_map[key]
+        else:
+            # Find which line item table it is
+            for line_num, section in self.line_item_sections.items():
+                # Extract the table from the section
+                table = None
+                for i in range(section.content_layout.count()):
+                    widget = section.content_layout.itemAt(i).widget()
+                    if isinstance(widget, QTableWidget):
+                        table = widget
+                        break
+                
+                if table and sender == table:
+                    key = f"line_{line_num}_{row}"
+                    if key in self.annotation_index_map:
+                        annotation_index = self.annotation_index_map[key]
+                    break
+        
+        # Emit signal with annotation index if found
+        if annotation_index is not None:
+            self.annotationSelected.emit(annotation_index)
