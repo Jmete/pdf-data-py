@@ -2,7 +2,7 @@
 
 # Application settings
 APP_NAME = "PDF Data Viewer"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 DEFAULT_WINDOW_WIDTH = 1200
 DEFAULT_WINDOW_HEIGHT = 800
 

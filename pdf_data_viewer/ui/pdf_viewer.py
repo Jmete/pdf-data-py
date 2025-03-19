@@ -189,16 +189,19 @@ class PDFViewer(QGraphicsView):
                 target_width_ratio = 0.9
                 calculated_zoom = (view_width * target_width_ratio) / first_page_width
                 
-                # Keep zoom within reasonable bounds
-                self.zoom_factor = max(min(calculated_zoom, 2.0), 1.0)
+                # Keep zoom within reasonable bounds, but allow zooming out as needed
+                self.zoom_factor = max(min(calculated_zoom, 2.0), 0.1)
                 self.initial_zoom_set = True
         
         # Apply the zoom
         self.resetTransform()
         self.scale(self.zoom_factor, self.zoom_factor)
         
-        # Center the content
-        self.centerOn(scene_rect.center())
+        # Instead of centering on the entire document, focus on the top portion
+        if len(self.pages) > 0:
+            # Position to top-left of the first page
+            top_center_point = QPointF(scene_rect.center().x(), scene_rect.top() + 10)
+            self.centerOn(top_center_point)
         
         # Emit status update
         self.statusUpdated.emit(f"Zoom: {int(self.zoom_factor * 100)}%")
