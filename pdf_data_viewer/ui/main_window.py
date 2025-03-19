@@ -159,14 +159,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(zoom_slider_label)
         
         self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setRange(50, 800)  # 50% to 800%
-        self.zoom_slider.setValue(200)  # 200% default
+        self.zoom_slider.setRange(10, 800)  # 10% to 800%
+        self.zoom_slider.setValue(100)  # 100% default
         self.zoom_slider.setFixedWidth(150)
         self.zoom_slider.valueChanged.connect(self.onZoomSliderChange)
         toolbar.addWidget(self.zoom_slider)
         
         # Zoom percentage label
-        self.zoom_label = QLabel("200%")
+        self.zoom_label = QLabel("100%")
         self.zoom_label.setFixedWidth(50)
         toolbar.addWidget(self.zoom_label)
         

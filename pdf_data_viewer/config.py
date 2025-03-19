@@ -2,13 +2,13 @@
 
 # Application settings
 APP_NAME = "PDF Data Viewer"
-APP_VERSION = "0.2.0"
+APP_VERSION = "1.2.0"
 DEFAULT_WINDOW_WIDTH = 1200
 DEFAULT_WINDOW_HEIGHT = 800
 
 # PDF viewer settings
-DEFAULT_ZOOM_FACTOR = 2.0
-MIN_ZOOM = 0.5
+DEFAULT_ZOOM_FACTOR = 1.0
+MIN_ZOOM = 0.1
 MAX_ZOOM = 8.0
 DEFAULT_DPI = 300
 PAGE_GAP = 20  # Gap between pages in vertical view
