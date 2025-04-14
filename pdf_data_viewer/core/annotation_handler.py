@@ -1,22 +1,25 @@
 """Handler for PDF annotations."""
 
 import fitz
+from PySide6.QtWidgets import QMessageBox
 from ..config import DATE_FIELDS
 from ..utils.date_utils import standardize_date
 
 class AnnotationHandler:
     """Handler for PDF annotation operations."""
     
-    def __init__(self, pdf_document):
+    def __init__(self, pdf_document, parent_window=None):
         """
         Initialize the annotation handler.
         
         Args:
             pdf_document (PDFDocument): PDF document handler instance
+            parent_window: Parent window for displaying alert messages
         """
         self.pdf_document = pdf_document
         self.annotations = []
         self.last_line_item_number = ""
+        self.parent_window = parent_window
     
     def clear_annotations(self):
         """Clear all annotations from memory."""
@@ -62,16 +65,25 @@ class AnnotationHandler:
         if field_info:
             annotation.update(field_info)
             
-            # Process date fields (only if standardized_date is not already provided)
-            if field_info.get('field') in DATE_FIELDS and 'standardized_date' not in annotation and text:
+            # Process date fields
+            if field_info.get('field') in DATE_FIELDS and text:
                 cleaned_text = self.clean_text_for_date_field(text, field_info.get('field'))
-                if cleaned_text != text:
-                    annotation['text'] = cleaned_text
                 
-                # Try to standardize the date (only log at debug level to avoid duplication)
+                # Try to standardize the date
                 std_date = standardize_date(cleaned_text, log_level='debug')
                 if std_date:
-                    annotation['standardized_date'] = std_date
+                    # Store only the standardized date for date fields
+                    annotation['text'] = std_date
+                else:
+                    # Keep original text but inform user that standardization failed
+                    annotation['text'] = cleaned_text
+                    if self.parent_window:
+                        QMessageBox.warning(
+                            self.parent_window,
+                            "Date Standardization Failed",
+                            f"Could not convert '{cleaned_text}' to a standardized date format.\n\n"
+                            f"The annotation will be saved with the original text."
+                        )
             
             # Remember the last line item number
             if field_info.get('type') == 'line_item' and field_info.get('line_item_number'):
@@ -154,3 +166,12 @@ class AnnotationHandler:
         if field_type in DATE_FIELDS:
             return text.replace('[', '').replace(']', '').strip()
         return text
+        
+    def set_parent_window(self, parent_window):
+        """
+        Set the parent window for displaying alert messages.
+        
+        Args:
+            parent_window: Parent window widget
+        """
+        self.parent_window = parent_window

@@ -57,8 +57,8 @@ class MainWindow(QMainWindow):
         # Initialize PDF viewer
         self.pdf_viewer = PDFViewer()
         
-        # Initialize annotation handler
-        self.annotation_handler = AnnotationHandler(self.pdf_viewer.pdf_doc)
+        # Initialize annotation handler with parent window for alerts
+        self.annotation_handler = AnnotationHandler(self.pdf_viewer.pdf_doc, parent_window=self)
         
         # Initialize data panel
         self.data_panel = DataPanel()
@@ -411,27 +411,22 @@ class MainWindow(QMainWindow):
             self._cleanup_annotation(annotation)
 
     def _process_date_field(self, field_info, text):
-        """Process date fields."""
-        date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
-        if field_info.get('field') in date_fields:
-            from ..utils.date_utils import standardize_date
-            
-            # Clean the text for date fields
-            cleaned_text = text.replace('[', '').replace(']', '').strip()
-            
-            # Pre-standardize the date and add it to the field info
-            std_date = standardize_date(cleaned_text, log_level='error')
-            if std_date:
-                field_info['standardized_date'] = std_date
-            else:
-                # Alert user if date standardization failed
-                QMessageBox.warning(
-                    self,
-                    "Date Standardization Failed",
-                    f"Could not convert '{cleaned_text}' to a standardized date format.\n\n"
-                    f"The annotation will be saved, but the date won't be standardized.\n"
-                    f"You may want to redo this annotation with clearer date text."
-                )
+            """Process date fields."""
+            date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
+            if field_info.get('field') in date_fields:
+                from ..utils.date_utils import standardize_date
+                
+                # Clean the text for date fields
+                cleaned_text = text.replace('[', '').replace(']', '').strip()
+                
+                # Pre-standardize the date and add it to the field info
+                std_date = standardize_date(cleaned_text, log_level='error')
+                if std_date:
+                    # The standardized date will be added to the text directly in the annotation_handler
+                    pass
+                else:
+                    # Alert will be handled by the annotation_handler
+                    pass
 
     def _cleanup_annotation(self, annotation):
         """Remove annotation highlights when needed."""
@@ -525,6 +520,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export Error", "No PDF file is currently loaded.")
             return
         
+        # Check if we have any annotations to export
+        if not self.annotation_handler.annotations:
+            QMessageBox.warning(self, "Export Error", "No annotations to export. Please create annotations first.")
+            return
+        
         # Get filename for export
         file_name = os.path.basename(self.current_file).replace(".pdf", "_annotations.csv")
         default_path = os.path.join(EXPORT_DIR, file_name)
@@ -539,15 +539,85 @@ class MainWindow(QMainWindow):
         if not output_path:
             return
         
-        # Export using the database
-        success = self.db.export_annotations_to_csv(self.current_file, output_path)
+        # Show a status message
+        self.statusBar().showMessage(f"Exporting annotations to {output_path}...")
+        QApplication.processEvents()  # Allow UI to update
         
-        if success:
-            QMessageBox.information(self, "Export Successful", 
-                                  f"Annotations exported to {output_path}")
-        else:
-            QMessageBox.warning(self, "Export Failed", 
-                              "Failed to export annotations or no annotations to export.")
+        # Set up logging to capture any errors
+        import io
+        import logging
+        log_capture = io.StringIO()
+        ch = logging.StreamHandler(log_capture)
+        ch.setLevel(logging.DEBUG)
+        logging.getLogger().addHandler(ch)
+        
+        try:
+            # Export using the database
+            success = self.db.export_annotations_to_csv(self.current_file, output_path)
+            
+            if success:
+                QMessageBox.information(self, "Export Successful", 
+                                    f"Annotations exported to {output_path}")
+                self.statusBar().showMessage(f"Annotations exported to {output_path}")
+            else:
+                # Check the database directly to help diagnose the issue
+                file_name = os.path.basename(self.current_file)
+                
+                # Get count of annotations for this file
+                self.db.cursor.execute('SELECT COUNT(*) FROM annotations WHERE file_name = ?', (file_name,))
+                count = self.db.cursor.fetchone()[0]
+                
+                # Get log output to show error details
+                log_output = log_capture.getvalue()
+                
+                if count == 0:
+                    error_msg = f"No annotations found in database for {file_name}.\n\nYour annotations may not have been saved to the database."
+                else:
+                    error_msg = f"Failed to export {count} annotations found in database.\n\n"
+                    
+                    # Add detailed error if available
+                    if log_output:
+                        # Limit log output to avoid overwhelming the dialog
+                        if len(log_output) > 1000:
+                            log_output = log_output[-1000:]
+                        error_msg += f"Error details:\n{log_output}"
+                    else:
+                        error_msg += "Check application logs for details."
+                        
+                # Try to detect common issues
+                try:
+                    # Check if the output directory is writable
+                    test_file = os.path.join(os.path.dirname(output_path), "test_write.tmp")
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                except PermissionError:
+                    error_msg += "\n\nPermission error: Cannot write to the selected directory. Try a different location."
+                except Exception as e:
+                    error_msg += f"\n\nPossible file system error: {str(e)}"
+                
+                # Show detailed error message
+                error_dialog = QMessageBox(self)
+                error_dialog.setWindowTitle("Export Failed")
+                error_dialog.setIcon(QMessageBox.Warning)
+                error_dialog.setText("Failed to export annotations")
+                error_dialog.setDetailedText(error_msg)
+                error_dialog.setStandardButtons(QMessageBox.Ok)
+                error_dialog.exec_()
+                
+                self.statusBar().showMessage("Export failed")
+                
+        except Exception as e:
+            error_msg = f"An unexpected error occurred during export: {str(e)}"
+            log_output = log_capture.getvalue()
+            if log_output:
+                error_msg += f"\n\nLog details:\n{log_output}"
+            
+            QMessageBox.critical(self, "Export Error", error_msg)
+            self.statusBar().showMessage("Export error")
+        finally:
+            # Remove the log handler
+            logging.getLogger().removeHandler(ch)
     
     def zoomIn(self):
         """Zoom in the PDF view."""

@@ -2,7 +2,7 @@
 
 # Application settings
 APP_NAME = "PDF Data Viewer"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 DEFAULT_WINDOW_WIDTH = 1200
 DEFAULT_WINDOW_HEIGHT = 800
 
@@ -39,7 +39,8 @@ DATE_FIELDS = ['rfq_date', 'due_date', 'requested_delivery_date']
 # Metadata fields
 META_FIELDS = [
     "document_name", "customer_name", "buyer_name", 
-    "currency", "rfq_date", "due_date"
+    "currency", "rfq_date", "due_date", 
+    "rfq_number", "buyer_email", "buyer_phone", "buyer_job_position"
 ]
 
 # Line item fields

@@ -3,6 +3,7 @@
 import sqlite3
 import os
 import csv
+import time
 from ..utils.date_utils import standardize_date
 from ..config import DB_PATH
 
@@ -29,9 +30,164 @@ class AnnotationDB:
             # Enable foreign key support
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.cursor = self.conn.cursor()
+            
+            # Check and migrate schema if needed
+            self._check_and_migrate_schema()
         except sqlite3.Error as e:
             print(f"Database connection error: {str(e)}")
-    
+
+    def _check_and_migrate_schema(self):
+        """Check database schema and migrate if necessary."""
+        try:
+            # First check if the annotations table exists at all
+            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='annotations'")
+            if not self.cursor.fetchone():
+                print("Annotations table doesn't exist yet. Will be created.")
+                return
+                
+            # Check table structure
+            self.cursor.execute("PRAGMA table_info(annotations)")
+            columns = self.cursor.fetchall()
+            column_names = [col[1] for col in columns]
+            
+            print(f"Current database schema: {column_names}")
+            
+            # Create a backup regardless of schema status
+            backup_table = f"annotations_backup_{int(time.time())}"
+            self.cursor.execute(f"CREATE TABLE IF NOT EXISTS {backup_table} AS SELECT * FROM annotations")
+            print(f"Created backup table: {backup_table}")
+            
+            # Start a transaction for all modifications
+            self.cursor.execute("BEGIN TRANSACTION")
+            
+            try:
+                # First, check for and fix the arrow notation in date fields
+                # This will update any text like "original → standardized" to just "standardized"
+                print("Checking for date fields with arrow notation...")
+                
+                from ..config import DATE_FIELDS
+                
+                # Get all annotations with date fields
+                self.cursor.execute('''
+                SELECT id, annotation_text, field_name 
+                FROM annotations 
+                WHERE field_name IN ({}) AND annotation_text LIKE '%→%'
+                '''.format(','.join(['?' for _ in DATE_FIELDS])), DATE_FIELDS)
+                
+                date_rows = self.cursor.fetchall()
+                print(f"Found {len(date_rows)} date fields with arrow notation")
+                
+                for row in date_rows:
+                    row_id, text, field_name = row
+                    
+                    # Extract just the standardized part (after arrow)
+                    if "→" in text:
+                        parts = text.split("→")
+                        if len(parts) > 1:
+                            standardized_date = parts[1].strip()
+                            
+                            # Update with just the standardized date
+                            self.cursor.execute(
+                                "UPDATE annotations SET annotation_text = ? WHERE id = ?",
+                                (standardized_date, row_id)
+                            )
+                            print(f"Updated date for row {row_id}: '{text}' -> '{standardized_date}'")
+                
+                # Check if we need to migrate the schema (standardized_date column exists)
+                if 'standardized_date' in column_names:
+                    print("Found old schema with standardized_date column. Migrating...")
+                    
+                    # Count records migrated
+                    self.cursor.execute("SELECT COUNT(*) FROM annotations")
+                    count = self.cursor.fetchone()[0]
+                    print(f"Migrating {count} annotations...")
+                    
+                    # Migrate standardized date data into annotation_text
+                    self.cursor.execute("""
+                    SELECT id, annotation_text, field_name, standardized_date 
+                    FROM annotations 
+                    WHERE standardized_date IS NOT NULL AND standardized_date != ''
+                    AND field_name IN ({})
+                    """.format(','.join(['?' for _ in DATE_FIELDS])), DATE_FIELDS)
+                    
+                    rows_to_update = self.cursor.fetchall()
+                    
+                    print(f"Updating {len(rows_to_update)} annotations with standardized dates")
+                    for row in rows_to_update:
+                        row_id, text, field_name, std_date = row
+                        
+                        # For date fields, use only the standardized date
+                        if std_date and std_date.strip():
+                            self.cursor.execute(
+                                "UPDATE annotations SET annotation_text = ? WHERE id = ?", 
+                                (std_date, row_id)
+                            )
+                    
+                    # Create new table without standardized_date column
+                    self.cursor.execute("""
+                    CREATE TABLE annotations_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        file_name TEXT NOT NULL,
+                        page_num INTEGER NOT NULL,
+                        rect_x0 REAL NOT NULL,
+                        rect_y0 REAL NOT NULL,
+                        rect_x1 REAL NOT NULL,
+                        rect_y1 REAL NOT NULL,
+                        annotation_text TEXT,
+                        annotation_type TEXT NOT NULL,
+                        field_name TEXT NOT NULL,
+                        line_item_number TEXT,
+                        is_multipage BOOLEAN DEFAULT 0,
+                        multipage_position INTEGER,
+                        multipage_type TEXT,
+                        group_id TEXT,
+                        date_created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """)
+                    
+                    # Get the columns that exist in both old and new tables
+                    common_columns = [col for col in column_names if col != 'standardized_date']
+                    
+                    # Copy data to new table using only common columns
+                    query = f"""
+                    INSERT INTO annotations_new 
+                    ({', '.join(common_columns)})
+                    SELECT {', '.join(common_columns)}
+                    FROM annotations
+                    """
+                    print(f"Copying data with query: {query}")
+                    self.cursor.execute(query)
+                    
+                    # Verify data was copied correctly
+                    self.cursor.execute("SELECT COUNT(*) FROM annotations_new")
+                    new_count = self.cursor.fetchone()[0]
+                    
+                    if new_count != count:
+                        print(f"Warning: Row count mismatch after migration: {count} -> {new_count}")
+                    
+                    # Replace old table with new one
+                    self.cursor.execute("DROP TABLE annotations")
+                    self.cursor.execute("ALTER TABLE annotations_new RENAME TO annotations")
+                    
+                    print(f"Schema migration completed successfully. Updated {len(rows_to_update)} annotations.")
+                
+                # Commit all changes
+                self.conn.commit()
+                print("All database updates completed successfully.")
+                    
+            except Exception as e:
+                # Rollback on error
+                self.conn.rollback()
+                print(f"Database updates failed: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                print("The database will continue to use the existing schema")
+        
+        except sqlite3.Error as e:
+            print(f"Error checking schema: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
     def create_tables(self):
         """Create necessary tables if they don't exist."""
         try:
@@ -49,7 +205,6 @@ class AnnotationDB:
                 annotation_type TEXT NOT NULL,
                 field_name TEXT NOT NULL,
                 line_item_number TEXT,
-                standardized_date TEXT,
                 is_multipage BOOLEAN DEFAULT 0,
                 multipage_position INTEGER,  -- Changed to INTEGER for ordering (1,2,3...)
                 multipage_type TEXT,         -- New field for start/middle/end
@@ -81,18 +236,8 @@ class AnnotationDB:
             rect = annotation['rect']
             rect_x0, rect_y0, rect_x1, rect_y1 = rect.x0, rect.y0, rect.x1, rect.y1
             
-            # Check if the field is a date field and should be converted
-            date_fields = ['rfq_date', 'due_date', 'requested_delivery_date']
-            field_name = annotation.get('field', '')
-            standardized_date = None
-            
-            if field_name in date_fields and annotation.get('text'):
-                # Use standardized_date if it's already in the annotation
-                if 'standardized_date' in annotation and annotation['standardized_date']:
-                    standardized_date = annotation['standardized_date']
-                else:
-                    # Try to convert the date
-                    standardized_date = standardize_date(annotation.get('text', ''))
+            # Get the annotation text (which may already include standardized date)
+            annotation_text = annotation.get('text', '')
             
             # Check for multi-page annotation data
             is_multipage = 1 if annotation.get('is_multipage', False) else 0
@@ -104,18 +249,17 @@ class AnnotationDB:
             self.cursor.execute('''
             INSERT INTO annotations (
                 file_name, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
-                annotation_text, annotation_type, field_name, line_item_number, standardized_date,
+                annotation_text, annotation_type, field_name, line_item_number,
                 is_multipage, multipage_position, multipage_type, group_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 file_name,
                 annotation['page'],
                 rect_x0, rect_y0, rect_x1, rect_y1,
-                annotation.get('text', ''),
+                annotation_text,
                 annotation.get('type', ''),
-                field_name,
+                annotation.get('field', ''),
                 annotation.get('line_item_number', ''),
-                standardized_date,
                 is_multipage,
                 multipage_position,
                 multipage_type,
@@ -147,7 +291,7 @@ class AnnotationDB:
             self.cursor.execute('''
             SELECT id, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
                 annotation_text, annotation_type, field_name, line_item_number,
-                standardized_date, file_name, is_multipage, multipage_position, multipage_type, group_id
+                file_name, is_multipage, multipage_position, multipage_type, group_id
             FROM annotations
             WHERE file_name = ?
             ORDER BY group_id, multipage_position, id
@@ -164,27 +308,19 @@ class AnnotationDB:
                     'type': row[7],
                     'field': row[8],
                     'line_item_number': row[9],
-                    'file_name': row[11]
+                    'file_name': row[10]
                 }
                 
-                # If this is a date field and we have a standardized date
-                if row[10] is not None:
-                    annotation['standardized_date'] = row[10]
-                
                 # Add multi-page annotation data
-                if row[12] == 1:  # is_multipage
+                if row[11] == 1:  # is_multipage
                     annotation['is_multipage'] = True
-                    annotation['multipage_position'] = row[13]  # multipage_position
-                    annotation['multipage_type'] = row[14]      # multipage_type
-                    annotation['group_id'] = row[15]            # group_id
+                    annotation['multipage_position'] = row[12]  # multipage_position
+                    annotation['multipage_type'] = row[13]      # multipage_type
+                    annotation['group_id'] = row[14]            # group_id
                 
                 annotations.append(annotation)
             
             return annotations
-            
-        except sqlite3.Error as e:
-            print(f"Error retrieving annotations: {str(e)}")
-            return []
             
         except sqlite3.Error as e:
             print(f"Error retrieving annotations: {str(e)}")
@@ -237,61 +373,110 @@ class AnnotationDB:
             bool: True if successful, False otherwise
         """
         try:
-            # Get annotations directly from the database to ensure we have the most current data
+            # Extract just the filename (not the full path)
             file_name = os.path.basename(file_path)
             
-            self.cursor.execute('''
-            SELECT id, page_num, rect_x0, rect_y0, rect_x1, rect_y1,
-                annotation_text, annotation_type, field_name, line_item_number,
-                standardized_date, file_name, is_multipage, multipage_position, multipage_type, group_id
-            FROM annotations
-            WHERE file_name = ?
-            ORDER BY field_name, line_item_number, group_id, multipage_position, id
-            ''', (file_name,))
+            # Get the field names in the current table to ensure query compatibility
+            self.cursor.execute("PRAGMA table_info(annotations)")
+            table_info = self.cursor.fetchall()
+            column_names = [col[1] for col in table_info]
             
-            rows = self.cursor.fetchall()
+            print(f"Database columns: {column_names}")
             
-            if not rows:
+            # Check if there are any annotations for this file first
+            self.cursor.execute('SELECT COUNT(*) FROM annotations WHERE file_name = ?', (file_name,))
+            count = self.cursor.fetchone()[0]
+            
+            if count == 0:
                 print(f"No annotations found in database for {file_name}")
                 return False
             
-            # Make sure the export directory exists
-            os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+            print(f"Found {count} annotations to export")
             
-            with open(output_path, 'w', newline='') as csvfile:
+            # Construct a query using only the columns that exist in the table
+            # This ensures compatibility with both old and new schema
+            query_columns = [
+                'id', 'page_num', 'rect_x0', 'rect_y0', 'rect_x1', 'rect_y1',
+                'annotation_text', 'annotation_type', 'field_name', 'line_item_number',
+                'file_name', 'is_multipage', 'multipage_position', 'multipage_type', 'group_id'
+            ]
+            
+            # Ensure all columns in query actually exist in the table
+            # Remove any that don't exist (to handle old schema versions)
+            existing_query_columns = [col for col in query_columns if col in column_names]
+            
+            # Build the query dynamically
+            query = f"SELECT {', '.join(existing_query_columns)} FROM annotations WHERE file_name = ?"
+            
+            print(f"Executing query: {query}")
+            self.cursor.execute(query, (file_name,))
+            
+            rows = self.cursor.fetchall()
+            print(f"Query returned {len(rows)} rows")
+            
+            if not rows:
+                print(f"Query returned no rows for {file_name} despite count indicating rows exist")
+                return False
+            
+            # Make sure the export directory exists
+            export_dir = os.path.dirname(os.path.abspath(output_path))
+            os.makedirs(export_dir, exist_ok=True)
+            print(f"Export directory: {export_dir}")
+            
+            # Get column positions for mapping
+            column_positions = {col: i for i, col in enumerate(existing_query_columns)}
+            
+            with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+                # Use consistent fieldnames for the CSV
                 fieldnames = [
                     'id', 'file_name', 'page', 'type', 'field', 'line_item_number', 
                     'rect_x0', 'rect_y0', 'rect_x1', 'rect_y1',
-                    'text', 'standardized_date', 
-                    'is_multipage', 'multipage_position', 'multipage_type', 'multipage_group'
+                    'text', 'is_multipage', 'multipage_position', 'multipage_type', 'group_id'
                 ]
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                
+                # Remove any fieldnames that we don't have data for
+                available_fieldnames = []
+                for field in fieldnames:
+                    db_field = field
+                    if field == 'page':
+                        db_field = 'page_num'
+                    elif field == 'type':
+                        db_field = 'annotation_type'
+                    elif field == 'field':
+                        db_field = 'field_name'
+                    elif field == 'text':
+                        db_field = 'annotation_text'
+                    
+                    if db_field in column_positions or field == 'page':  # Special case for page
+                        available_fieldnames.append(field)
+                
+                print(f"CSV fieldnames: {available_fieldnames}")
+                
+                writer = csv.DictWriter(csvfile, fieldnames=available_fieldnames)
                 writer.writeheader()
                 
+                # Write data row by row
                 for row in rows:
-                    is_multipage = row[12] == 1
-                    multipage_position = row[13]
-                    multipage_type = row[14]
-                    group_id = row[15]
+                    row_dict = {}
                     
-                    row_dict = {
-                        'id': row[0],
-                        'file_name': row[11],
-                        'page': row[1] + 1,  # +1 for human-readable page numbers
-                        'type': row[7],
-                        'field': row[8],
-                        'line_item_number': row[9],
-                        'rect_x0': row[2],
-                        'rect_y0': row[3],
-                        'rect_x1': row[4],
-                        'rect_y1': row[5],
-                        'text': row[6],
-                        'standardized_date': row[10] if row[10] else '',
-                        'is_multipage': 1 if is_multipage else 0,
-                        'multipage_position': multipage_position if multipage_position is not None else '',
-                        'multipage_type': multipage_type if multipage_type else '',
-                        'multipage_group': group_id if group_id else ''
-                    }
+                    # Map database columns to CSV columns
+                    for field in available_fieldnames:
+                        if field == 'page' and 'page_num' in column_positions:
+                            # Special handling for page - add 1 to make it human-readable
+                            row_dict[field] = row[column_positions['page_num']] + 1
+                        elif field == 'type' and 'annotation_type' in column_positions:
+                            row_dict[field] = row[column_positions['annotation_type']]
+                        elif field == 'field' and 'field_name' in column_positions:
+                            row_dict[field] = row[column_positions['field_name']]
+                        elif field == 'text' and 'annotation_text' in column_positions:
+                            row_dict[field] = row[column_positions['annotation_text']]
+                        elif field in ['rect_x0', 'rect_y0', 'rect_x1', 'rect_y1', 'line_item_number', 
+                                    'is_multipage', 'multipage_position', 'multipage_type', 'group_id', 'id', 'file_name']:
+                            if field in column_positions:
+                                value = row[column_positions[field]]
+                                # Convert None values to empty strings for CSV
+                                row_dict[field] = value if value is not None else ''
+                    
                     writer.writerow(row_dict)
                 
                 print(f"Successfully exported {len(rows)} annotations to {output_path}")
@@ -299,6 +484,8 @@ class AnnotationDB:
                 
         except Exception as e:
             print(f"Error exporting to CSV: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def close(self):

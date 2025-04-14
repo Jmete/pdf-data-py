@@ -325,136 +325,39 @@ class DataPanel(QScrollArea):
         self._populate_line_item_sections(line_item_annotations, on_delete_callback)
     
     def _populate_meta_section(self, meta_annotations, on_delete_callback):
-        """Populate the metadata section with annotation data."""
-        if not meta_annotations:
-            # If there are no metadata annotations, remove the section if it exists
-            if self.meta_section:
-                self.data_layout.removeWidget(self.meta_section)
-                self.meta_section.deleteLater()
-                self.meta_section = None
-                self.meta_table = None
-            return
-            
-        # Create the metadata section if it doesn't exist
-        if not self.meta_section:
-            self.meta_section = CollapsibleSection("Metadata")
-            self.meta_table = self.create_table(["Field", "Text", "Delete"])
-            self.meta_section.add_widget(self.meta_table)
-            # Insert at position right after annotations label
-            index = self.data_layout.indexOf(self.annotations_label) + 1
-            self.data_layout.insertWidget(index, self.meta_section)
-        else:
-            # Clear existing rows
-            self.meta_table.setRowCount(0)
-        
-        for i, (index, annot) in enumerate(meta_annotations):
-            row_position = self.meta_table.rowCount()
-            self.meta_table.insertRow(row_position)
-            
-            # Field name
-            field_item = QTableWidgetItem(annot.get('field', ''))
-            self.meta_table.setItem(row_position, 0, field_item)
-            
-            # Text content (with date formatting if applicable)
-            display_text = annot['text']
-            
-            if annot.get('field') in DATE_FIELDS:
-                if 'standardized_date' in annot and annot['standardized_date']:
-                    display_text = f"{annot['text']} → {annot['standardized_date']}"
-                else:
-                    # Try to standardize now
-                    std_date = standardize_date(annot['text'])
-                    if std_date:
-                        display_text = f"{annot['text']} → {std_date}"
-            
-            # Truncate if too long
-            if len(display_text) > 50:
-                display_text = display_text[:47] + "..."
+            """Populate the metadata section with annotation data."""
+            if not meta_annotations:
+                # If there are no metadata annotations, remove the section if it exists
+                if self.meta_section:
+                    self.data_layout.removeWidget(self.meta_section)
+                    self.meta_section.deleteLater()
+                    self.meta_section = None
+                    self.meta_table = None
+                return
                 
-            text_item = QTableWidgetItem(display_text)
+            # Create the metadata section if it doesn't exist
+            if not self.meta_section:
+                self.meta_section = CollapsibleSection("Metadata")
+                self.meta_table = self.create_table(["Field", "Text", "Delete"])
+                self.meta_section.add_widget(self.meta_table)
+                # Insert at position right after annotations label
+                index = self.data_layout.indexOf(self.annotations_label) + 1
+                self.data_layout.insertWidget(index, self.meta_section)
+            else:
+                # Clear existing rows
+                self.meta_table.setRowCount(0)
             
-            # Make multi-page annotations visually distinct
-            if annot.get('is_multipage', False):
-                text_item.setBackground(QColor(240, 240, 255))  # Light blue background
-                
-            self.meta_table.setItem(row_position, 1, text_item)
-            
-            # Delete button
-            if on_delete_callback:
-                delete_button = QPushButton("[x]")
-                delete_button.setFixedWidth(30)
-                delete_button.setFixedHeight(20)  # Make button smaller
-                # Use a lambda to capture the current annotation index
-                delete_func = lambda checked, idx=index: on_delete_callback(idx)
-                delete_button.clicked.connect(delete_func)
-                self.meta_table.setCellWidget(row_position, 2, delete_button)
-            
-            # Map row to annotation index
-            self.annotation_index_map[f"meta_{row_position}"] = index
-        
-        # Update badge count
-        self.meta_section.set_badge_count(len(meta_annotations))
-        
-        # Expand section if it has items
-        if len(meta_annotations) > 0:
-            self.meta_section.expand()
-            
-        # Calculate exact height needed for the table
-        header_height = self.meta_table.horizontalHeader().height()
-        row_count = self.meta_table.rowCount()
-        row_height = self.meta_table.rowHeight(0)
-        table_border = 2  # Border pixels
-        total_table_height = header_height + (row_height * row_count) + table_border
-        
-        # Set the table height precisely
-        self.meta_table.setFixedHeight(total_table_height)
-        
-        # Force layout update to apply the size constraints
-        self.meta_table.updateGeometry()
-        self.meta_section.content.updateGeometry()
-        self.meta_section.updateGeometry()
-    
-    def _populate_line_item_sections(self, line_item_annotations, on_delete_callback):
-        """Populate the line item sections with annotation data."""
-        # Sort line item numbers numerically if possible
-        sorted_line_items = sorted(line_item_annotations.keys(), 
-                                 key=lambda x: int(x) if x.isdigit() else float('inf'))
-        
-        for line_num in sorted_line_items:
-            # Create a section for this line item
-            section_title = f"Line Item #{line_num}" if line_num else "Line Item (No Number)"
-            section = CollapsibleSection(section_title)
-            
-            # Create a table for this line item's annotations
-            table = self.create_table(["Field", "Text", "Delete"])
-            section.add_widget(table)
-            
-            # Add the section to our layout
-            self.line_items_layout.addWidget(section)
-            self.line_item_sections[line_num] = section
-            
-            # Populate the table
-            annotations = line_item_annotations[line_num]
-            for i, (index, annot) in enumerate(annotations):
-                row_position = table.rowCount()
-                table.insertRow(row_position)
+            for i, (index, annot) in enumerate(meta_annotations):
+                row_position = self.meta_table.rowCount()
+                self.meta_table.insertRow(row_position)
                 
                 # Field name
                 field_item = QTableWidgetItem(annot.get('field', ''))
-                table.setItem(row_position, 0, field_item)
+                self.meta_table.setItem(row_position, 0, field_item)
                 
-                # Text content (with date formatting if applicable)
+                # Text content (for date fields it should already be in standardized format)
                 display_text = annot['text']
-                
-                if annot.get('field') in DATE_FIELDS:
-                    if 'standardized_date' in annot and annot['standardized_date']:
-                        display_text = f"{annot['text']} → {annot['standardized_date']}"
-                    else:
-                        # Try to standardize now
-                        std_date = standardize_date(annot['text'])
-                        if std_date:
-                            display_text = f"{annot['text']} → {std_date}"
-                
+                    
                 # Truncate if too long
                 if len(display_text) > 50:
                     display_text = display_text[:47] + "..."
@@ -465,7 +368,7 @@ class DataPanel(QScrollArea):
                 if annot.get('is_multipage', False):
                     text_item.setBackground(QColor(240, 240, 255))  # Light blue background
                     
-                table.setItem(row_position, 1, text_item)
+                self.meta_table.setItem(row_position, 1, text_item)
                 
                 # Delete button
                 if on_delete_callback:
@@ -475,31 +378,110 @@ class DataPanel(QScrollArea):
                     # Use a lambda to capture the current annotation index
                     delete_func = lambda checked, idx=index: on_delete_callback(idx)
                     delete_button.clicked.connect(delete_func)
-                    table.setCellWidget(row_position, 2, delete_button)
+                    self.meta_table.setCellWidget(row_position, 2, delete_button)
                 
                 # Map row to annotation index
-                self.annotation_index_map[f"line_{line_num}_{row_position}"] = index
+                self.annotation_index_map[f"meta_{row_position}"] = index
             
             # Update badge count
-            section.set_badge_count(len(annotations))
+            self.meta_section.set_badge_count(len(meta_annotations))
             
-            # Expand section
-            section.expand()
-            
+            # Expand section if it has items
+            if len(meta_annotations) > 0:
+                self.meta_section.expand()
+                
             # Calculate exact height needed for the table
-            header_height = table.horizontalHeader().height()
-            row_count = table.rowCount()
-            row_height = table.rowHeight(0)
+            header_height = self.meta_table.horizontalHeader().height()
+            row_count = self.meta_table.rowCount()
+            row_height = self.meta_table.rowHeight(0)
             table_border = 2  # Border pixels
             total_table_height = header_height + (row_height * row_count) + table_border
             
-            # Set table height exactly
-            table.setFixedHeight(total_table_height)
+            # Set the table height precisely
+            self.meta_table.setFixedHeight(total_table_height)
             
             # Force layout update to apply the size constraints
-            table.updateGeometry()
-            section.content.updateGeometry()
-            section.updateGeometry()
+            self.meta_table.updateGeometry()
+            self.meta_section.content.updateGeometry()
+            self.meta_section.updateGeometry()
+    
+    def _populate_line_item_sections(self, line_item_annotations, on_delete_callback):
+            """Populate the line item sections with annotation data."""
+            # Sort line item numbers numerically if possible
+            sorted_line_items = sorted(line_item_annotations.keys(), 
+                                    key=lambda x: int(x) if x.isdigit() else float('inf'))
+            
+            for line_num in sorted_line_items:
+                # Create a section for this line item
+                section_title = f"Line Item #{line_num}" if line_num else "Line Item (No Number)"
+                section = CollapsibleSection(section_title)
+                
+                # Create a table for this line item's annotations
+                table = self.create_table(["Field", "Text", "Delete"])
+                section.add_widget(table)
+                
+                # Add the section to our layout
+                self.line_items_layout.addWidget(section)
+                self.line_item_sections[line_num] = section
+                
+                # Populate the table
+                annotations = line_item_annotations[line_num]
+                for i, (index, annot) in enumerate(annotations):
+                    row_position = table.rowCount()
+                    table.insertRow(row_position)
+                    
+                    # Field name
+                    field_item = QTableWidgetItem(annot.get('field', ''))
+                    table.setItem(row_position, 0, field_item)
+                    
+                    # Text content (for date fields it should already be in standardized format)
+                    display_text = annot['text']
+                    
+                    # Truncate if too long
+                    if len(display_text) > 50:
+                        display_text = display_text[:47] + "..."
+                        
+                    text_item = QTableWidgetItem(display_text)
+                    
+                    # Make multi-page annotations visually distinct
+                    if annot.get('is_multipage', False):
+                        text_item.setBackground(QColor(240, 240, 255))  # Light blue background
+                        
+                    table.setItem(row_position, 1, text_item)
+                    
+                    # Delete button
+                    if on_delete_callback:
+                        delete_button = QPushButton("[x]")
+                        delete_button.setFixedWidth(30)
+                        delete_button.setFixedHeight(20)  # Make button smaller
+                        # Use a lambda to capture the current annotation index
+                        delete_func = lambda checked, idx=index: on_delete_callback(idx)
+                        delete_button.clicked.connect(delete_func)
+                        table.setCellWidget(row_position, 2, delete_button)
+                    
+                    # Map row to annotation index
+                    self.annotation_index_map[f"line_{line_num}_{row_position}"] = index
+                
+                # Update badge count
+                section.set_badge_count(len(annotations))
+                
+                # Expand section
+                section.expand()
+                
+                # Calculate exact height needed for the table
+                header_height = table.horizontalHeader().height()
+                row_count = table.rowCount()
+                row_height = table.rowHeight(0)
+                table_border = 2  # Border pixels
+                total_table_height = header_height + (row_height * row_count) + table_border
+                
+                # Set table height exactly
+                table.setFixedHeight(total_table_height)
+                
+                # Force layout update to apply the size constraints
+                table.updateGeometry()
+                section.content.updateGeometry()
+                section.updateGeometry()
     
     def onTableCellClicked(self, row, column):
         """
