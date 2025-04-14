@@ -21,12 +21,14 @@ A Python application for viewing PDF files and extracting structured data throug
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/yourusername/pdf-data-py.git
 cd pdf-data-py
 ```
 
 2. Install the package:
+
 ```bash
 pip install -e .
 ```
@@ -34,11 +36,13 @@ pip install -e .
 ## Usage
 
 Run the application:
+
 ```bash
 python -m pdf_data_viewer.main
 ```
 
 Or use the entry point:
+
 ```bash
 pdf-data-viewer
 ```
@@ -48,14 +52,19 @@ pdf-data-viewer
 The application supports the extraction of the following data types:
 
 ### Metadata
+
 - Document name
 - Customer name
 - Buyer name
+- Buyer Email
+- Buyer Phone
+- Buyer Job Position
 - Currency
 - RFQ date
 - Due date
 
 ### Line Item Data
+
 - Line item number
 - Material number
 - Part number
@@ -70,6 +79,7 @@ The application supports the extraction of the following data types:
 ## Development
 
 ### Project Structure
+
 ```
 pdf-data-py/
 ├── data/                     # Data directory
